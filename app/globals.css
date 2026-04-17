@@ -1,26 +1,104 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+@import "leaflet.markercluster/dist/MarkerCluster.css";
+@import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 
+/* ---- Classic, warm, readable palette ------------------------------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper:    #f6f2e9;   /* page background — warm ivory */
+  --card:     #fffdf7;   /* card surfaces */
+  --ink:      #1f1b16;   /* body text — near-black, slightly warm */
+  --ink-soft: #4a4437;   /* secondary text */
+  --muted:    #8b8371;   /* tertiary / captions */
+  --rule:     #e5dccb;   /* hairlines / borders */
+  --accent:   #2f5d3a;   /* deep forest green — trail aesthetic */
+  --accent-ink: #1e3d26;
+  --danger:   #a13030;
+
+  --marker-size: 45px;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-muted: var(--muted);
+  --color-rule: var(--rule);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  background: var(--paper);
+  color: var(--ink);
 }
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "ss01", "cv11";
 }
+
+h1, h2, h3, .serif {
+  font-family: var(--font-serif), ui-serif, Georgia, "Times New Roman", serif;
+  font-feature-settings: "ss01";
+  letter-spacing: -0.01em;
+}
+
+/* subtle paper texture without an image — radial noise via gradients */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 800px at 20% -10%, rgba(255, 247, 224, 0.55), transparent 60%),
+    radial-gradient(900px 600px at 110% 10%, rgba(231, 220, 195, 0.35), transparent 60%);
+  z-index: -1;
+}
+
+/* Small-caps eyebrow label */
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- Photo markers on the map ---- */
+.photo-marker-wrapper {
+  position: relative;
+  width: var(--marker-size);
+  height: var(--marker-size);
+}
+.photo-marker {
+  width: var(--marker-size);
+  height: var(--marker-size);
+  border-radius: 9999px;
+  border: 3px solid white;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+}
+.cluster-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #a13030;
+  color: white;
+  border-radius: 9999px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid white;
+  z-index: 2;
+}
+.custom-cluster-icon { background: transparent !important; border: 0 !important; }
+.custom-cluster-icon > div { background: transparent !important; }
+
