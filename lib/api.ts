@@ -75,7 +75,13 @@ export const api = {
     file: File | Blob,
     lat: number,
     lng: number,
-    extra: { width?: number; height?: number; takenAt?: string } = {},
+    extra: {
+      width?: number;
+      height?: number;
+      takenAt?: string;
+      onProgress?: (loaded: number, total: number) => void;
+      signal?: AbortSignal;
+    } = {},
   ) => {
     const fd = new FormData();
     fd.append('file', file, (file as File).name ?? 'photo.jpg');
@@ -84,10 +90,45 @@ export const api = {
     if (extra.width) fd.append('width', String(extra.width));
     if (extra.height) fd.append('height', String(extra.height));
     if (extra.takenAt) fd.append('takenAt', extra.takenAt);
-    return fetch(`${API_BASE}/api/events/${slug}/photos`, {
-      method: 'POST',
-      body: fd,
-    }).then(handle<PhotoDoc>);
+    // Use XHR so we can observe upload progress. iOS Safari's `fetch()` gives
+    // no signal between "request started" and "response received", which makes
+    // a slow cellular upload look like the app has frozen.
+    return new Promise<PhotoDoc>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/api/events/${slug}/photos`);
+      xhr.responseType = 'text';
+      // Server-side HEIC decode + sharp can take 10-20 s for a 4 MB iPhone
+      // photo; give mobile uploads plenty of headroom before we give up.
+      xhr.timeout = 120_000;
+      if (extra.onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) extra.onProgress!(e.loaded, e.total);
+        };
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as PhotoDoc);
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          reject(
+            new Error(
+              `${xhr.status} ${xhr.statusText}: ${xhr.responseText?.slice(0, 400) ?? ''}`,
+            ),
+          );
+        }
+      };
+      xhr.onerror = () => reject(new Error('network error during upload'));
+      xhr.ontimeout = () => reject(new Error('upload timed out after 120 s'));
+      xhr.onabort = () => reject(new Error('upload aborted'));
+      if (extra.signal) {
+        if (extra.signal.aborted) xhr.abort();
+        else extra.signal.addEventListener('abort', () => xhr.abort());
+      }
+      xhr.send(fd);
+    });
   },
   deletePhoto: (id: string) =>
     fetch(`${API_BASE}/api/photos/${id}`, { method: 'DELETE' }).then(

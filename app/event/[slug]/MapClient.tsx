@@ -326,6 +326,10 @@ export default function MapClient({ slug }: { slug: string }) {
           width: prepared.width,
           height: prepared.height,
           takenAt: gps.takenAt,
+          onProgress: (loaded, totalBytes) => {
+            const pct = totalBytes ? Math.round((loaded / totalBytes) * 100) : 0;
+            setLoading(`Uploading ${processed + 1}/${total} · ${pct}%`);
+          },
         });
         added++;
       } catch (err) {
