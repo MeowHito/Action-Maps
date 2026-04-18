@@ -635,9 +635,19 @@ export default function MapClient({ slug }: { slug: string }) {
               {routes.map((r) => (
                 <li
                   key={r._id}
-                  className="flex items-center justify-between px-4 py-3 text-sm"
+                  className="flex items-center justify-between text-sm hover:bg-zinc-50 transition-colors cursor-pointer active:bg-zinc-100"
+                  onClick={() => {
+                    const layer = routeLayersRef.current.get(r._id);
+                    if (layer && mapRef.current) {
+                      try {
+                        const bounds = (layer as L.Layer & { getBounds?: () => L.LatLngBounds }).getBounds?.();
+                        if (bounds) mapRef.current.fitBounds(bounds, { padding: [30, 30] });
+                      } catch { /* no-op */ }
+                    }
+                    setRoutesOpen(false);
+                  }}
                 >
-                  <span className="flex min-w-0 items-center gap-2">
+                  <span className="flex min-w-0 items-center gap-2 px-4 py-3 flex-1">
                     <span
                       className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
                       style={{ background: r.color }}
@@ -645,8 +655,8 @@ export default function MapClient({ slug }: { slug: string }) {
                     <span className="truncate">{r.name}</span>
                   </span>
                   <button
-                    onClick={() => onDeleteRoute(r._id)}
-                    className="text-xs font-semibold text-red-600 hover:underline"
+                    onClick={(e) => { e.stopPropagation(); onDeleteRoute(r._id); }}
+                    className="text-xs font-semibold text-red-600 hover:underline px-4 py-3 shrink-0"
                   >
                     Delete
                   </button>
