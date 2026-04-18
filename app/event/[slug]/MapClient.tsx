@@ -43,6 +43,11 @@ export default function MapClient({ slug }: { slug: string }) {
   const [albumOpen, setAlbumOpen] = useState(false);
   const [routesOpen, setRoutesOpen] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
+  const [locating, setLocating] = useState(false);
+  const userMarkerRef = useRef<L.Marker | null>(null);
+  const userAccuracyRef = useRef<L.Circle | null>(null);
+  const userWatchIdRef = useRef<number | null>(null);
+  const userCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
 
   // ---- Map init ----
   useEffect(() => {
@@ -245,20 +250,60 @@ export default function MapClient({ slug }: { slug: string }) {
   }, [slug, addPhoto, addRoute, removePhotoMarker, removeRouteLayer]);
 
   // ---- Uploads ----
+  const getFallbackCoords = async (): Promise<{
+    lat: number;
+    lng: number;
+    source: string;
+  } | null> => {
+    if (userCoordsRef.current) {
+      return { ...userCoordsRef.current, source: 'current location' };
+    }
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 8000,
+            maximumAge: 30000,
+          });
+        });
+        const coords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        };
+        userCoordsRef.current = coords;
+        return { ...coords, source: 'current location' };
+      } catch {
+        /* fall through */
+      }
+    }
+    const c = mapRef.current?.getCenter();
+    if (c) return { lat: c.lat, lng: c.lng, source: 'map center' };
+    return null;
+  };
+
   const onUploadPhotos = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const list = Array.from(files);
     let added = 0;
     let skipped = 0;
+    let fallbackUsed = 0;
+    let fallbackSource = '';
     for (let i = 0; i < list.length; i++) {
       setLoading(`Processing photo ${i + 1}/${list.length}…`);
       try {
         const file = list[i];
         const converted = await convertHeicIfNeeded(file);
-        const gps = await extractGps(converted);
+        let gps = await extractGps(converted);
         if (!gps) {
-          skipped++;
-          continue;
+          const fb = await getFallbackCoords();
+          if (!fb) {
+            skipped++;
+            continue;
+          }
+          gps = { lat: fb.lat, lng: fb.lng };
+          fallbackUsed++;
+          fallbackSource = fb.source;
         }
         const resized = await resizeToJpeg(converted);
         const blob = new File(
@@ -272,17 +317,103 @@ export default function MapClient({ slug }: { slug: string }) {
           takenAt: gps.takenAt,
         });
         added++;
-        // the socket 'photo:created' event will handle state update
       } catch (err) {
         console.error(err);
         skipped++;
       }
     }
     setLoading(null);
-    if (skipped > 0) {
-      alert(`Uploaded ${added} photo(s). Skipped ${skipped} (no GPS or error).`);
+    const parts: string[] = [];
+    if (added > 0) parts.push(`Uploaded ${added} photo(s)`);
+    if (fallbackUsed > 0)
+      parts.push(`${fallbackUsed} used ${fallbackSource} (no EXIF GPS)`);
+    if (skipped > 0) parts.push(`skipped ${skipped}`);
+    if (parts.length) alert(parts.join(' · '));
+  };
+
+  // ---- Locate me ----
+  const setUserLocation = (
+    lat: number,
+    lng: number,
+    accuracy: number | null,
+  ) => {
+    const map = mapRef.current;
+    if (!map) return;
+    userCoordsRef.current = { lat, lng };
+    if (!userMarkerRef.current) {
+      const icon = L.divIcon({
+        html:
+          '<div style="width:18px;height:18px;border-radius:9999px;background:#2563eb;border:3px solid white;box-shadow:0 0 0 2px rgba(37,99,235,0.35),0 2px 6px rgba(0,0,0,0.35);"></div>',
+        className: '',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      });
+      userMarkerRef.current = L.marker([lat, lng], {
+        icon,
+        zIndexOffset: 1000,
+      }).addTo(map);
+    } else {
+      userMarkerRef.current.setLatLng([lat, lng]);
+    }
+    if (accuracy && accuracy > 0) {
+      if (!userAccuracyRef.current) {
+        userAccuracyRef.current = L.circle([lat, lng], {
+          radius: accuracy,
+          color: '#2563eb',
+          weight: 1,
+          opacity: 0.6,
+          fillColor: '#2563eb',
+          fillOpacity: 0.08,
+        }).addTo(map);
+      } else {
+        userAccuracyRef.current.setLatLng([lat, lng]);
+        userAccuracyRef.current.setRadius(accuracy);
+      }
     }
   };
+
+  const onLocateMe = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported on this device.');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        setUserLocation(latitude, longitude, accuracy);
+        mapRef.current?.setView([latitude, longitude], 17);
+        setLocating(false);
+        if (userWatchIdRef.current == null && navigator.geolocation) {
+          userWatchIdRef.current = navigator.geolocation.watchPosition(
+            (p) =>
+              setUserLocation(
+                p.coords.latitude,
+                p.coords.longitude,
+                p.coords.accuracy,
+              ),
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
+          );
+        }
+      },
+      (err) => {
+        setLocating(false);
+        alert(`Could not get your location: ${err.message}`);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    );
+  };
+
+  // Cleanup watch on unmount
+  useEffect(() => {
+    return () => {
+      if (userWatchIdRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(userWatchIdRef.current);
+        userWatchIdRef.current = null;
+      }
+    };
+  }, []);
 
   const onUploadGpx = async (files: FileList | null) => {
     if (!files || !files.length) return;
@@ -340,6 +471,16 @@ export default function MapClient({ slug }: { slug: string }) {
         </span>
         <span className="text-xs font-normal text-zinc-500">/{slug}</span>
       </div>
+
+      {/* Locate me button */}
+      <button
+        onClick={onLocateMe}
+        disabled={locating}
+        title="Show my location"
+        className="absolute right-3 top-16 z-[1000] flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-lg shadow-md hover:bg-white disabled:opacity-60"
+      >
+        {locating ? '…' : '📍'}
+      </button>
 
       {/* Bottom floating panel */}
       <div className="absolute bottom-3 left-1/2 z-[1000] w-[96%] max-w-md -translate-x-1/2 rounded-xl bg-white/98 p-2 shadow-lg">
