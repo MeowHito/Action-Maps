@@ -299,15 +299,21 @@ export default function MapClient({ slug }: { slug: string }) {
       });
 
     const processOne = async (file: File) => {
+      const tag = `[upload:${file.name}]`;
       try {
-        // EXIF first (exifr supports HEIC natively without decoding pixels).
+        console.log(tag, 'start', { size: file.size, type: file.type });
+        setLoading(`Reading EXIF ${processed + 1}/${total}…`);
+        const gpsT0 = Date.now();
         let gps = await extractGps(file);
+        console.log(tag, 'exif done in', Date.now() - gpsT0, 'ms, gps=', gps);
 
-        // Prepare the blob for upload. HEIC is passed through untouched so the
-        // backend (sharp + libvips + libheif) can decode every iPhone format.
+        setLoading(`Preparing ${processed + 1}/${total}…`);
+        const prepT0 = Date.now();
         const prepared = await processForUpload(file);
+        console.log(tag, 'prepared in', Date.now() - prepT0, 'ms, size=', prepared.blob.size);
 
         if (!gps) {
+          setLoading(`Locating ${processed + 1}/${total}…`);
           const fb = await getFallbackCoords();
           if (!fb) {
             failures.push({ name: file.name, reason: 'no GPS and no fallback location' });
@@ -317,11 +323,14 @@ export default function MapClient({ slug }: { slug: string }) {
           gps = { lat: fb.lat, lng: fb.lng };
           fallbackUsed++;
           fallbackSource = fb.source;
+          console.log(tag, 'using fallback coords', fb);
         }
 
         const outFile = new File([prepared.blob], prepared.filename, {
           type: prepared.mimeType,
         });
+        console.log(tag, 'POST starting', outFile.size, 'bytes');
+        const uploadT0 = Date.now();
         await api.uploadPhoto(slug, outFile, gps.lat, gps.lng, {
           width: prepared.width,
           height: prepared.height,
@@ -331,6 +340,7 @@ export default function MapClient({ slug }: { slug: string }) {
             setLoading(`Uploading ${processed + 1}/${total} · ${pct}%`);
           },
         });
+        console.log(tag, 'POST ok in', Date.now() - uploadT0, 'ms');
         added++;
       } catch (err) {
         const msg =

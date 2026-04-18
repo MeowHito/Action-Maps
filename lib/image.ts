@@ -12,10 +12,19 @@ export interface GpsData {
 /** Extract GPS + timestamp from an image's EXIF. Returns null if no coords. */
 export async function extractGps(file: Blob): Promise<GpsData | null> {
   try {
-    const data = await exifr.parse(file, {
+    // iOS Safari can stall for 10+ s parsing a 4 MB HEIC's EXIF box. Cap it so
+    // the upload flow keeps moving even if exifr gets stuck — we'll just fall
+    // back to the device's current location for GPS.
+    const timeout = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 5000),
+    );
+    const parse = exifr.parse(file, {
       gps: true,
       pick: ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate'],
     });
+    const data = (await Promise.race([parse, timeout])) as
+      | { latitude?: number; longitude?: number; DateTimeOriginal?: Date; CreateDate?: Date }
+      | null;
     if (!data) return null;
     if (typeof data.latitude === 'number' && typeof data.longitude === 'number') {
       const ts = (data.DateTimeOriginal ?? data.CreateDate) as Date | undefined;
