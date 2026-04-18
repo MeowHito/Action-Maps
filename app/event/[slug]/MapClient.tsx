@@ -7,11 +7,7 @@ import 'leaflet.markercluster';
 import 'leaflet-gpx';
 import { api } from '@/lib/api';
 import { getSocket, joinEvent } from '@/lib/socket';
-import {
-  convertHeicIfNeeded,
-  extractGps,
-  resizeToJpeg,
-} from '@/lib/image';
+import { extractGps, resizeToJpeg } from '@/lib/image';
 import type { EventDoc, PhotoDoc, RouteDoc } from '@/lib/types';
 
 type MarkerClusterGroup = L.MarkerClusterGroup;
@@ -285,62 +281,78 @@ export default function MapClient({ slug }: { slug: string }) {
   const onUploadPhotos = async (files: FileList | null) => {
     if (!files || !files.length) return;
     const list = Array.from(files);
+    const total = list.length;
     let added = 0;
     let skipped = 0;
     let fallbackUsed = 0;
     let fallbackSource = '';
-    try {
-      for (let i = 0; i < list.length; i++) {
-        const file = list[i];
-        setLoading(`Processing photo ${i + 1}/${list.length}…`);
-        try {
-          // 1) Read EXIF from the ORIGINAL file first.
-          //    exifr supports HEIC natively, so we avoid heic2any entirely when possible.
-          let gps = await extractGps(file);
+    let processed = 0;
 
-          // 2) Convert HEIC → JPEG only if the browser actually handed us HEIC.
-          //    On iOS Safari with accept="image/*" (no explicit HEIC), the picker
-          //    already auto-converts to JPEG, so this branch normally does not run.
-          let imageBlob: Blob = file;
-          try {
-            imageBlob = await convertHeicIfNeeded(file);
-          } catch (convErr) {
-            console.warn('HEIC conversion failed, skipping file', file.name, convErr);
-            skipped++;
-            continue;
-          }
-
-          if (!gps) {
-            const fb = await getFallbackCoords();
-            if (!fb) {
-              skipped++;
-              continue;
-            }
-            gps = { lat: fb.lat, lng: fb.lng };
-            fallbackUsed++;
-            fallbackSource = fb.source;
-          }
-
-          const resized = await resizeToJpeg(imageBlob);
-          const outFile = new File(
-            [resized.blob],
-            file.name.replace(/\.hei[cf]$/i, '.jpg'),
-            { type: 'image/jpeg' },
-          );
-          await api.uploadPhoto(slug, outFile, gps.lat, gps.lng, {
-            width: resized.width,
-            height: resized.height,
-            takenAt: gps.takenAt,
-          });
-          added++;
-        } catch (err) {
-          console.error('photo upload failed', file?.name, err);
-          skipped++;
+    // Yield to the browser so Safari paints the loading overlay and doesn't
+    // look "frozen" while decoding/encoding big HEIC images.
+    const yieldToUi = () =>
+      new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => setTimeout(resolve, 0));
+        } else {
+          setTimeout(resolve, 0);
         }
+      });
+
+    const processOne = async (file: File) => {
+      try {
+        // 1) EXIF from original file (exifr handles HEIC natively)
+        let gps = await extractGps(file);
+
+        // 2) Resize + encode to JPEG. resizeToJpeg now uses createImageBitmap
+        //    which decodes HEIC natively on iOS Safari 17+ without heic2any.
+        const resized = await resizeToJpeg(file);
+
+        if (!gps) {
+          const fb = await getFallbackCoords();
+          if (!fb) {
+            skipped++;
+            return;
+          }
+          gps = { lat: fb.lat, lng: fb.lng };
+          fallbackUsed++;
+          fallbackSource = fb.source;
+        }
+
+        const outFile = new File(
+          [resized.blob],
+          file.name.replace(/\.hei[cf]$/i, '.jpg'),
+          { type: 'image/jpeg' },
+        );
+        await api.uploadPhoto(slug, outFile, gps.lat, gps.lng, {
+          width: resized.width,
+          height: resized.height,
+          takenAt: gps.takenAt,
+        });
+        added++;
+      } catch (err) {
+        console.error('photo upload failed', file?.name, err);
+        skipped++;
+      } finally {
+        processed++;
+        setLoading(`Processing photo ${processed}/${total}…`);
+      }
+    };
+
+    // Process with limited concurrency. 2 at a time keeps iOS Safari responsive
+    // while still being noticeably faster than strictly sequential.
+    const CONCURRENCY = 2;
+    setLoading(`Processing photo 0/${total}…`);
+    try {
+      for (let i = 0; i < list.length; i += CONCURRENCY) {
+        const batch = list.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map((f) => processOne(f)));
+        await yieldToUi();
       }
     } finally {
       setLoading(null);
     }
+
     const parts: string[] = [];
     if (added > 0) parts.push(`Uploaded ${added} photo(s)`);
     if (fallbackUsed > 0)

@@ -1,6 +1,6 @@
 import exifr from 'exifr';
 
-const MAX_DIM = 1600;
+const MAX_DIM = 1280;
 const JPEG_QUALITY = 0.82;
 
 export interface GpsData {
@@ -31,60 +31,93 @@ export async function extractGps(file: Blob): Promise<GpsData | null> {
   }
 }
 
-/** Convert HEIC/HEIF → JPEG blob. Pass-through if already a regular image. */
-export async function convertHeicIfNeeded(file: File): Promise<Blob> {
-  const isHeic =
-    /\.hei[cf]$/i.test(file.name) ||
+function isHeic(file: { name?: string; type?: string }): boolean {
+  return (
+    /\.hei[cf]$/i.test(file.name ?? '') ||
     file.type === 'image/heic' ||
-    file.type === 'image/heif';
-  if (!isHeic) return file;
-  const heic2any = (await import('heic2any')).default;
-  const out = await heic2any({
-    blob: file,
-    toType: 'image/jpeg',
-    quality: 0.9,
-  });
-  return Array.isArray(out) ? out[0] : out;
+    file.type === 'image/heif'
+  );
 }
 
-/** Resize to a max dimension and re-encode as JPEG. */
+/**
+ * Legacy helper kept for backward-compat. The new pipeline decodes HEIC
+ * natively via createImageBitmap inside resizeToJpeg, so most callers can
+ * skip this entirely. If you still need a JPEG Blob up-front (rare), this
+ * will lazy-load heic2any as a last resort.
+ */
+export async function convertHeicIfNeeded(file: File): Promise<Blob> {
+  if (!isHeic(file)) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2d not available');
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+        'image/jpeg',
+        0.9,
+      );
+    });
+  } catch {
+    // Last resort: heic2any (heavy on iOS memory, can hang Safari)
+    const heic2any = (await import('heic2any')).default;
+    const out = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+    return Array.isArray(out) ? out[0] : out;
+  }
+}
+
+/**
+ * Resize to a max dimension and re-encode as JPEG.
+ * Uses createImageBitmap (native, GPU-friendly, supports HEIC on Safari 17+)
+ * and only falls back to heic2any if the browser cannot decode the blob.
+ */
 export async function resizeToJpeg(
   blob: Blob,
   maxDim = MAX_DIM,
   quality = JPEG_QUALITY,
 ): Promise<{ blob: Blob; width: number; height: number }> {
-  const img = await loadImage(blob);
-  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-  const w = Math.max(1, Math.round(img.width * scale));
-  const h = Math.max(1, Math.round(img.height * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('canvas 2d not available');
-  ctx.drawImage(img, 0, 0, w, h);
-  const out = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
-      'image/jpeg',
-      quality,
-    );
-  });
-  return { blob: out, width: w, height: h };
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    // Fallback for browsers that cannot decode HEIC natively (old iOS / Android / desktop Chrome)
+    const converted = await convertHeicBlobViaLib(blob);
+    bitmap = await createImageBitmap(converted);
+  }
+
+  try {
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2d not available');
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const out = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+        'image/jpeg',
+        quality,
+      );
+    });
+    // Explicitly clear the canvas to help Safari GC
+    canvas.width = 0;
+    canvas.height = 0;
+    return { blob: out, width: w, height: h };
+  } finally {
+    bitmap.close?.();
+  }
 }
 
-function loadImage(blob: Blob): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = (e) => {
-      URL.revokeObjectURL(url);
-      reject(e);
-    };
-    img.src = url;
-  });
+async function convertHeicBlobViaLib(blob: Blob): Promise<Blob> {
+  const heic2any = (await import('heic2any')).default;
+  const out = await heic2any({ blob, toType: 'image/jpeg', quality: 0.9 });
+  return Array.isArray(out) ? out[0] : out;
 }
