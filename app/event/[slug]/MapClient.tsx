@@ -7,7 +7,7 @@ import 'leaflet.markercluster';
 import 'leaflet-gpx';
 import { api } from '@/lib/api';
 import { getSocket, joinEvent } from '@/lib/socket';
-import { extractGps, resizeToJpeg } from '@/lib/image';
+import { extractGps, processForUpload } from '@/lib/image';
 import type { EventDoc, PhotoDoc, RouteDoc } from '@/lib/types';
 
 type MarkerClusterGroup = L.MarkerClusterGroup;
@@ -287,9 +287,8 @@ export default function MapClient({ slug }: { slug: string }) {
     let fallbackUsed = 0;
     let fallbackSource = '';
     let processed = 0;
+    const failures: { name: string; reason: string }[] = [];
 
-    // Yield to the browser so Safari paints the loading overlay and doesn't
-    // look "frozen" while decoding/encoding big HEIC images.
     const yieldToUi = () =>
       new Promise<void>((resolve) => {
         if (typeof requestAnimationFrame === 'function') {
@@ -301,16 +300,17 @@ export default function MapClient({ slug }: { slug: string }) {
 
     const processOne = async (file: File) => {
       try {
-        // 1) EXIF from original file (exifr handles HEIC natively)
+        // EXIF first (exifr supports HEIC natively without decoding pixels).
         let gps = await extractGps(file);
 
-        // 2) Resize + encode to JPEG. resizeToJpeg now uses createImageBitmap
-        //    which decodes HEIC natively on iOS Safari 17+ without heic2any.
-        const resized = await resizeToJpeg(file);
+        // Prepare the blob for upload. HEIC is passed through untouched so the
+        // backend (sharp + libvips + libheif) can decode every iPhone format.
+        const prepared = await processForUpload(file);
 
         if (!gps) {
           const fb = await getFallbackCoords();
           if (!fb) {
+            failures.push({ name: file.name, reason: 'no GPS and no fallback location' });
             skipped++;
             return;
           }
@@ -319,19 +319,24 @@ export default function MapClient({ slug }: { slug: string }) {
           fallbackSource = fb.source;
         }
 
-        const outFile = new File(
-          [resized.blob],
-          file.name.replace(/\.hei[cf]$/i, '.jpg'),
-          { type: 'image/jpeg' },
-        );
+        const outFile = new File([prepared.blob], prepared.filename, {
+          type: prepared.mimeType,
+        });
         await api.uploadPhoto(slug, outFile, gps.lat, gps.lng, {
-          width: resized.width,
-          height: resized.height,
+          width: prepared.width,
+          height: prepared.height,
           takenAt: gps.takenAt,
         });
         added++;
       } catch (err) {
-        console.error('photo upload failed', file?.name, err);
+        const msg =
+          err instanceof Error
+            ? `${err.name}: ${err.message}`
+            : typeof err === 'string'
+              ? err
+              : JSON.stringify(err);
+        console.error('photo upload failed', file?.name, msg, err);
+        failures.push({ name: file.name, reason: msg });
         skipped++;
       } finally {
         processed++;
@@ -339,8 +344,7 @@ export default function MapClient({ slug }: { slug: string }) {
       }
     };
 
-    // Process with limited concurrency. 2 at a time keeps iOS Safari responsive
-    // while still being noticeably faster than strictly sequential.
+    // HEIC is now forwarded untouched to the backend, so no WASM contention.
     const CONCURRENCY = 2;
     setLoading(`Processing photo 0/${total}…`);
     try {
@@ -358,7 +362,16 @@ export default function MapClient({ slug }: { slug: string }) {
     if (fallbackUsed > 0)
       parts.push(`${fallbackUsed} used ${fallbackSource} (no EXIF GPS)`);
     if (skipped > 0) parts.push(`skipped ${skipped}`);
-    if (parts.length) alert(parts.join(' · '));
+    let message = parts.join(' · ');
+    if (failures.length) {
+      const sample = failures
+        .slice(0, 3)
+        .map((f) => `• ${f.name}: ${f.reason}`)
+        .join('\n');
+      const more = failures.length > 3 ? `\n…and ${failures.length - 3} more` : '';
+      message += `\n\nErrors:\n${sample}${more}`;
+    }
+    if (message) alert(message);
   };
 
   // ---- Locate me ----
