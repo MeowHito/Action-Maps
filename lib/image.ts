@@ -11,33 +11,51 @@ export interface GpsData {
 
 /** Extract GPS + timestamp from an image's EXIF. Returns null if no coords. */
 export async function extractGps(file: Blob): Promise<GpsData | null> {
+  // iOS Safari can take several seconds parsing a 4 MB HEIC's EXIF box; cap it
+  // so the upload flow keeps moving, but generously — a premature timeout here
+  // silently drops the real photo GPS and falls back to device location.
+  const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+    Promise.race([
+      p,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+    ]);
+
+  // exifr.gps() is the dedicated GPS extractor — it always reads the raw
+  // GPSLatitude / GPSLongitude / *Ref tags and returns signed decimals. Using
+  // exifr.parse() with `pick: ['latitude', 'longitude']` does NOT work because
+  // `pick` filters segment reads by tag name, and `latitude`/`longitude` are
+  // computed virtual fields — the raw GPS tags never get loaded, so the
+  // virtual fields come back undefined. This was the root cause of iOS photos
+  // showing wrong coordinates (falling back to device location).
+  let lat: number | undefined;
+  let lng: number | undefined;
   try {
-    // iOS Safari can stall for 10+ s parsing a 4 MB HEIC's EXIF box. Cap it so
-    // the upload flow keeps moving even if exifr gets stuck — we'll just fall
-    // back to the device's current location for GPS.
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), 5000),
-    );
-    const parse = exifr.parse(file, {
-      gps: true,
-      pick: ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate'],
-    });
-    const data = (await Promise.race([parse, timeout])) as
-      | { latitude?: number; longitude?: number; DateTimeOriginal?: Date; CreateDate?: Date }
-      | null;
-    if (!data) return null;
-    if (typeof data.latitude === 'number' && typeof data.longitude === 'number') {
-      const ts = (data.DateTimeOriginal ?? data.CreateDate) as Date | undefined;
-      return {
-        lat: data.latitude,
-        lng: data.longitude,
-        takenAt: ts?.toISOString?.(),
-      };
+    const gps = (await withTimeout(exifr.gps(file), 15000)) as
+      | { latitude?: number; longitude?: number }
+      | null
+      | undefined;
+    if (gps && typeof gps.latitude === 'number' && typeof gps.longitude === 'number') {
+      lat = gps.latitude;
+      lng = gps.longitude;
     }
-    return null;
   } catch {
-    return null;
+    /* fall through — no GPS */
   }
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+
+  let takenAt: string | undefined;
+  try {
+    const meta = (await withTimeout(
+      exifr.parse(file, ['DateTimeOriginal', 'CreateDate']),
+      8000,
+    )) as { DateTimeOriginal?: Date; CreateDate?: Date } | null | undefined;
+    const ts = meta?.DateTimeOriginal ?? meta?.CreateDate;
+    if (ts instanceof Date && !isNaN(ts.getTime())) takenAt = ts.toISOString();
+  } catch {
+    /* timestamp optional */
+  }
+
+  return { lat, lng, takenAt };
 }
 
 function isHeic(file: { name?: string; type?: string }): boolean {
