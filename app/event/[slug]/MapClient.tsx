@@ -256,13 +256,20 @@ export default function MapClient({ slug }: { slug: string }) {
     }
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       try {
-        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        // iOS Safari sometimes silently hangs getCurrentPosition when location
+        // permission is denied/blocked (the `timeout` option doesn't fire). Race
+        // against our own timer so the upload flow never stalls here.
+        const geo = new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 8000,
-            maximumAge: 30000,
+            enableHighAccuracy: false,
+            timeout: 5000,
+            maximumAge: 60000,
           });
         });
+        const hardTimeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('geolocation hard timeout')), 6000),
+        );
+        const pos = await Promise.race([geo, hardTimeout]);
         const coords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -270,7 +277,7 @@ export default function MapClient({ slug }: { slug: string }) {
         userCoordsRef.current = coords;
         return { ...coords, source: 'current location' };
       } catch {
-        /* fall through */
+        /* fall through to map center */
       }
     }
     const c = mapRef.current?.getCenter();
