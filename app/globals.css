@@ -16,6 +16,45 @@
   --danger:   #a13030;
 
   --marker-size: 45px;
+
+  /* Kinetic Cartography palette (home page) */
+  --k-primary:                #004cca;
+  --k-primary-container:      #0062ff;
+  --k-on-primary:             #ffffff;
+  --k-background:             #faf8ff;
+  --k-surface:                #faf8ff;
+  --k-on-background:          #191b24;
+  --k-on-surface:             #191b24;
+  --k-on-surface-variant:     #424656;
+  --k-outline:                #737687;
+  --k-outline-variant:        #c2c6d9;
+  --k-surface-container-low:  #f2f3ff;
+  --k-surface-container:      #ecedfa;
+  --k-surface-container-high: #e7e7f4;
+  --k-surface-container-highest: #e1e2ee;
+  --k-surface-container-lowest: #ffffff;
+  --k-primary-fixed-dim:      #b4c5ff;
+}
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.kinetic-gradient {
+  background: linear-gradient(135deg, #004cca 0%, #0062ff 100%);
 }
 
 @theme inline {

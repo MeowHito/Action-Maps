@@ -289,40 +289,58 @@ export default function MapClient({ slug }: { slug: string }) {
     let skipped = 0;
     let fallbackUsed = 0;
     let fallbackSource = '';
-    for (let i = 0; i < list.length; i++) {
-      setLoading(`Processing photo ${i + 1}/${list.length}…`);
-      try {
+    try {
+      for (let i = 0; i < list.length; i++) {
         const file = list[i];
-        const converted = await convertHeicIfNeeded(file);
-        let gps = await extractGps(converted);
-        if (!gps) {
-          const fb = await getFallbackCoords();
-          if (!fb) {
+        setLoading(`Processing photo ${i + 1}/${list.length}…`);
+        try {
+          // 1) Read EXIF from the ORIGINAL file first.
+          //    exifr supports HEIC natively, so we avoid heic2any entirely when possible.
+          let gps = await extractGps(file);
+
+          // 2) Convert HEIC → JPEG only if the browser actually handed us HEIC.
+          //    On iOS Safari with accept="image/*" (no explicit HEIC), the picker
+          //    already auto-converts to JPEG, so this branch normally does not run.
+          let imageBlob: Blob = file;
+          try {
+            imageBlob = await convertHeicIfNeeded(file);
+          } catch (convErr) {
+            console.warn('HEIC conversion failed, skipping file', file.name, convErr);
             skipped++;
             continue;
           }
-          gps = { lat: fb.lat, lng: fb.lng };
-          fallbackUsed++;
-          fallbackSource = fb.source;
+
+          if (!gps) {
+            const fb = await getFallbackCoords();
+            if (!fb) {
+              skipped++;
+              continue;
+            }
+            gps = { lat: fb.lat, lng: fb.lng };
+            fallbackUsed++;
+            fallbackSource = fb.source;
+          }
+
+          const resized = await resizeToJpeg(imageBlob);
+          const outFile = new File(
+            [resized.blob],
+            file.name.replace(/\.hei[cf]$/i, '.jpg'),
+            { type: 'image/jpeg' },
+          );
+          await api.uploadPhoto(slug, outFile, gps.lat, gps.lng, {
+            width: resized.width,
+            height: resized.height,
+            takenAt: gps.takenAt,
+          });
+          added++;
+        } catch (err) {
+          console.error('photo upload failed', file?.name, err);
+          skipped++;
         }
-        const resized = await resizeToJpeg(converted);
-        const blob = new File(
-          [resized.blob],
-          file.name.replace(/\.hei[cf]$/i, '.jpg'),
-          { type: 'image/jpeg' },
-        );
-        await api.uploadPhoto(slug, blob, gps.lat, gps.lng, {
-          width: resized.width,
-          height: resized.height,
-          takenAt: gps.takenAt,
-        });
-        added++;
-      } catch (err) {
-        console.error(err);
-        skipped++;
       }
+    } finally {
+      setLoading(null);
     }
-    setLoading(null);
     const parts: string[] = [];
     if (added > 0) parts.push(`Uploaded ${added} photo(s)`);
     if (fallbackUsed > 0)
@@ -515,7 +533,7 @@ export default function MapClient({ slug }: { slug: string }) {
             <span>Add photo</span>
             <input
               type="file"
-              accept="image/*,image/heic,image/heif"
+              accept="image/*"
               multiple
               className="hidden"
               onChange={(e) => {
