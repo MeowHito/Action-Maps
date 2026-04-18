@@ -228,32 +228,25 @@ export function isHeicFile(file: { name?: string; type?: string }): boolean {
 export async function processForUpload(
   file: File,
 ): Promise<{ blob: Blob; filename: string; mimeType: string; width: number; height: number }> {
-  // Try to decode + resize on the client — even for HEIC (iOS Safari 17+ supports
-  // HEIC via createImageBitmap natively; desktop falls back to heic2any inside
-  // resizeToJpeg). This drops a 4 MB iPhone HEIC to ~300 KB JPEG, so the mobile
-  // upload finishes in seconds instead of appearing to hang on a slow cellular
-  // link. Only when every decode path fails do we fall back to sending the
-  // original HEIC bytes for server-side heif-convert.
-  try {
-    const resized = await resizeToJpeg(file);
+  // HEIC → send raw to server. iOS Safari's createImageBitmap on large iPhone
+  // HEIC files can hang indefinitely (the webkit decoder walks every auxiliary
+  // image), and heic2any is heavy enough to freeze mobile Safari. The server
+  // has libheif 1.19 + heif-dec CLI that decodes every iPhone variant fast.
+  if (isHeic(file)) {
     return {
-      blob: resized.blob,
-      filename: file.name.replace(/\.(hei[cf]|png|webp|gif)$/i, '.jpg'),
-      mimeType: 'image/jpeg',
-      width: resized.width,
-      height: resized.height,
+      blob: file,
+      filename: file.name,
+      mimeType: file.type || 'image/heic',
+      width: 0,
+      height: 0,
     };
-  } catch (e) {
-    if (isHeic(file)) {
-      console.warn('[image] client-side HEIC decode failed, sending raw to server', errMsg(e));
-      return {
-        blob: file,
-        filename: file.name,
-        mimeType: file.type || 'image/heic',
-        width: 0,
-        height: 0,
-      };
-    }
-    throw e;
   }
+  const resized = await resizeToJpeg(file);
+  return {
+    blob: resized.blob,
+    filename: file.name.replace(/\.(png|webp|gif)$/i, '.jpg'),
+    mimeType: 'image/jpeg',
+    width: resized.width,
+    height: resized.height,
+  };
 }
