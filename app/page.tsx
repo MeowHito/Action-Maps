@@ -18,6 +18,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [tracksOpen, setTracksOpen] = useState(false);
+  const [tracksQuery, setTracksQuery] = useState('');
 
   const load = async () => {
     try {
@@ -65,6 +67,29 @@ export default function Home() {
     }
   };
 
+  const onShare = async (ev: EventDoc) => {
+    const url = `${window.location.origin}/event/${ev.slug}`;
+    const shareData = {
+      title: `GPX ACTION · ${ev.name}`,
+      text: `Check out this journey: ${ev.name}`,
+      url,
+    };
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+    } catch {
+      /* user cancelled or share failed — fall through to copy */
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`Link copied:\n${url}`);
+    } catch {
+      prompt('Copy this link:', url);
+    }
+  };
+
   return (
     <div
       className="min-h-screen overflow-x-hidden bg-[#faf8ff] text-[#191b24] selection:bg-[#b4c5ff]"
@@ -86,31 +111,17 @@ export default function Home() {
       </header>
 
       {/* ---------- Main ---------- */}
-      <main className="pt-20 pb-28 md:pb-12 px-4 md:ml-16">
+      <main className="pt-10 pb-28 md:pb-12 px-4 md:ml-16">
         {/* Hero + create */}
         <section className="mt-2 mb-6 relative">
           <div className="max-w-md mx-auto">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-[#f2f3ff] rounded-full mb-3">
-              <span
-                className="material-symbols-outlined text-[#004cca] text-[10px]"
-                style={{ fontVariationSettings: "'FILL' 1", fontSize: 10 }}
-              >
-                satellite_alt
-              </span>
-              <span
-                className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#004cca]"
-                style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-              >
-                Telemetry Active
-              </span>
-            </div>
+           
 
             <h2
-              className="text-3xl font-black tracking-tighter text-[#191b24] leading-[0.95] mb-2"
+              className="text-2xl font-black tracking-tighter text-[#191b24] leading-[0.95] mb-2"
               style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-            >
-              GPX Action Team <br />
-              <span className="text-[#004cca]">Photographer</span>
+            ><br />
+              <span className="text-[#004cca]">Action Team Photographer</span>
             </h2>
             <p className="text-[#424656] text-sm leading-snug mb-6 max-w-[95%]">
               Upload GPX files and photos to create interactive shared maps.
@@ -125,7 +136,7 @@ export default function Home() {
                   style={{
                     fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
                   }}
-                  placeholder="Map Name (e.g., Summit Push)"
+                  placeholder="Map Name "
                   type="text"
                 />
                 <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#737687] text-lg">
@@ -140,7 +151,7 @@ export default function Home() {
                   fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
                 }}
               >
-                {creating ? 'Launching…' : 'Start a New Journey'}
+                {creating ? 'Launching…' : 'Create Map'}
               </button>
               {error && (
                 <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -172,28 +183,7 @@ export default function Home() {
               </p>
             </div>
           </div>
-          <div className="p-3 bg-[#e1e2ee] rounded-xl flex items-center gap-2 border border-[#c2c6d9]/20">
-            <span className="material-symbols-outlined text-[#004cca] text-lg">
-              route
-            </span>
-            <h4
-              className="font-bold text-[10px] uppercase tracking-wider"
-              style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-            >
-              GPX Logic
-            </h4>
-          </div>
-          <div className="p-3 bg-[#e1e2ee] rounded-xl flex items-center gap-2 border border-[#c2c6d9]/20">
-            <span className="material-symbols-outlined text-[#004cca] text-lg">
-              group
-            </span>
-            <h4
-              className="font-bold text-[10px] uppercase tracking-wider"
-              style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-            >
-              Team Link
-            </h4>
-          </div>
+          
         </section>
 
         {/* Event ledger */}
@@ -203,7 +193,7 @@ export default function Home() {
               className="text-sm font-bold uppercase tracking-[0.18em] text-[#191b24]"
               style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
             >
-              Your Journeys
+              Maps History
             </h3>
             <button
               onClick={load}
@@ -250,8 +240,19 @@ export default function Home() {
                     </div>
                   </Link>
                   <button
+                    onClick={() => onShare(ev)}
+                    aria-label={`Share ${ev.slug}`}
+                    title="Share link"
+                    className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]"
+                  >
+                    <span className="material-symbols-outlined text-base">
+                      share
+                    </span>
+                  </button>
+                  <button
                     onClick={() => onDelete(ev.slug)}
                     aria-label={`Delete ${ev.slug}`}
+                    title="Delete journey"
                     className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-red-50 hover:text-red-600"
                   >
                     <span className="material-symbols-outlined text-base">
@@ -273,17 +274,7 @@ export default function Home() {
         >
           GPX ACTION TEAM
         </div>
-        <div className="flex gap-4">
-          <a className="text-[11px] text-[#737687] hover:text-[#004cca] transition-colors" href="#">
-            Terms
-          </a>
-          <a className="text-[11px] text-[#737687] hover:text-[#004cca] transition-colors" href="#">
-            Privacy
-          </a>
-          <a className="text-[11px] text-[#737687] hover:text-[#004cca] transition-colors" href="#">
-            Support
-          </a>
-        </div>
+        
         <p className="text-[10px] text-[#737687] text-center mt-1">
           © 2026 GPX Action Team
         </p>
@@ -308,30 +299,28 @@ export default function Home() {
             Explore
           </span>
         </a>
-        <a
-          className="flex flex-col items-center justify-center text-[#737687] px-4 py-1.5 hover:text-[#004cca] transition-all active:scale-90"
-          href="#"
+        <button
+          onClick={() => setTracksOpen(true)}
+          className={`flex flex-col items-center justify-center px-4 py-1.5 transition-all active:scale-90 ${
+            tracksOpen
+              ? 'text-[#004cca] bg-[#0062ff]/10 rounded-xl'
+              : 'text-[#737687] hover:text-[#004cca]'
+          }`}
         >
-          <span className="material-symbols-outlined text-xl">route</span>
+          <span
+            className="material-symbols-outlined text-xl"
+            style={tracksOpen ? { fontVariationSettings: "'FILL' 1" } : undefined}
+          >
+            route
+          </span>
           <span
             className="text-[9px] font-bold uppercase tracking-widest mt-0.5"
             style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
           >
             Tracks
           </span>
-        </a>
-        <a
-          className="flex flex-col items-center justify-center text-[#737687] px-4 py-1.5 hover:text-[#004cca] transition-all active:scale-90"
-          href="#"
-        >
-          <span className="material-symbols-outlined text-xl">photo_camera</span>
-          <span
-            className="text-[9px] font-bold uppercase tracking-widest mt-0.5"
-            style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-          >
-            Capture
-          </span>
-        </a>
+        </button>
+        
         <a
           className="flex flex-col items-center justify-center text-[#737687] px-4 py-1.5 hover:text-[#004cca] transition-all active:scale-90"
           href="#"
@@ -358,9 +347,18 @@ export default function Home() {
           >
             map
           </span>
-          <span className="material-symbols-outlined text-[#737687] hover:text-[#004cca] transition-colors cursor-pointer">
+          <button
+            onClick={() => setTracksOpen(true)}
+            aria-label="Open tracks list"
+            className={`material-symbols-outlined transition-colors cursor-pointer bg-transparent border-0 ${
+              tracksOpen
+                ? 'text-[#004cca] bg-[#0062ff]/20 p-2.5 rounded-xl'
+                : 'text-[#737687] hover:text-[#004cca]'
+            }`}
+            style={tracksOpen ? { fontVariationSettings: "'FILL' 1" } : undefined}
+          >
             route
-          </span>
+          </button>
           <span className="material-symbols-outlined text-[#737687] hover:text-[#004cca] transition-colors cursor-pointer">
             photo_camera
           </span>
@@ -369,6 +367,178 @@ export default function Home() {
           account_circle
         </span>
       </div>
+
+      {/* ---------- Tracks modal (full-screen list with search) ---------- */}
+      {tracksOpen && (() => {
+        const q = tracksQuery.trim().toLowerCase();
+        const filtered = q
+          ? events.filter((ev) => {
+              const name = ev.name.toLowerCase();
+              const slug = ev.slug.toLowerCase();
+              const dateStr = new Date(ev.createdAt)
+                .toLocaleDateString()
+                .toLowerCase();
+              const isoDate = new Date(ev.createdAt)
+                .toISOString()
+                .slice(0, 10);
+              return (
+                name.includes(q) ||
+                slug.includes(q) ||
+                dateStr.includes(q) ||
+                isoDate.includes(q)
+              );
+            })
+          : events;
+
+        return (
+          <div className="fixed inset-0 z-[2000] flex flex-col bg-[#faf8ff]">
+            {/* Header */}
+            <div className="flex flex-shrink-0 items-center justify-between border-b border-[#c2c6d9]/30 bg-[#faf8ff]/90 px-4 py-3 backdrop-blur-xl">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg shadow-sm kinetic-gradient">
+                  <span
+                    className="material-symbols-outlined text-white"
+                    style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}
+                  >
+                    route
+                  </span>
+                </div>
+                <div>
+                  <h3
+                    className="text-sm font-bold text-[#191b24]"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                  >
+                    All Maps
+                  </h3>
+                  <p className="text-[10px] text-[#424656]">
+                    {filtered.length} of {events.length} map
+                    {events.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setTracksOpen(false);
+                  setTracksQuery('');
+                }}
+                aria-label="Close"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ecedfa] transition-colors hover:bg-[#e7e7f4]"
+              >
+                <span className="material-symbols-outlined text-lg text-[#424656]">
+                  close
+                </span>
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="flex-shrink-0 border-b border-[#c2c6d9]/20 bg-[#faf8ff]/90 px-4 py-3 backdrop-blur-xl">
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-base text-[#737687]">
+                  search
+                </span>
+                <input
+                  type="text"
+                  value={tracksQuery}
+                  onChange={(e) => setTracksQuery(e.target.value)}
+                  placeholder="ค้นหาด้วยชื่อ หรือวันที่ (e.g. 4/18/2026)"
+                  className="w-full rounded-xl border border-[#c2c6d9]/40 bg-white py-2.5 pl-10 pr-10 text-sm text-[#191b24] placeholder:text-[#737687] focus:border-[#004cca] focus:outline-none focus:ring-2 focus:ring-[#004cca]/20 transition-all"
+                  style={{ fontFamily: 'Inter, sans-serif' }}
+                  autoFocus
+                />
+                {tracksQuery && (
+                  <button
+                    onClick={() => setTracksQuery('')}
+                    aria-label="Clear search"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full hover:bg-[#ecedfa]"
+                  >
+                    <span className="material-symbols-outlined text-sm text-[#737687]">
+                      close
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 pb-24">
+              {loading ? (
+                <p className="py-6 text-center text-xs text-[#737687]">
+                  Loading…
+                </p>
+              ) : filtered.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-[#c2c6d9] bg-[#f2f3ff]/60 px-4 py-10 text-center">
+                  <span className="material-symbols-outlined text-3xl text-[#737687]">
+                    {q ? 'search_off' : 'map'}
+                  </span>
+                  <p className="text-xs text-[#737687]">
+                    {q
+                      ? `ไม่พบแมพที่ตรงกับ "${tracksQuery}"`
+                      : 'ยังไม่มีแมพ สร้างแมพแรกด้านบน'}
+                  </p>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {filtered.map((ev) => (
+                    <li
+                      key={ev._id}
+                      className="group flex items-center justify-between gap-3 rounded-xl border border-[#c2c6d9]/30 bg-white px-3.5 py-3 transition hover:border-[#004cca]/40 hover:shadow-sm"
+                    >
+                      <Link
+                        href={`/event/${ev.slug}`}
+                        onClick={() => {
+                          setTracksOpen(false);
+                          setTracksQuery('');
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-3"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f2f3ff] text-[#004cca]">
+                          <span className="material-symbols-outlined text-base">
+                            map
+                          </span>
+                        </span>
+                        <div className="min-w-0">
+                          <p
+                            className="truncate text-sm font-bold text-[#191b24] group-hover:text-[#004cca]"
+                            style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                          >
+                            {ev.name}
+                          </p>
+                          <p className="mt-0.5 truncate text-[10px] text-[#737687]">
+                            /{ev.slug} ·{' '}
+                            {new Date(ev.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </Link>
+                      <button
+                        onClick={() => onShare(ev)}
+                        aria-label={`Share ${ev.slug}`}
+                        title="Share link"
+                        className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]"
+                      >
+                        <span className="material-symbols-outlined text-base">
+                          share
+                        </span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await onDelete(ev.slug);
+                        }}
+                        aria-label={`Delete ${ev.slug}`}
+                        title="Delete map"
+                        className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-red-50 hover:text-red-600"
+                      >
+                        <span className="material-symbols-outlined text-base">
+                          delete
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

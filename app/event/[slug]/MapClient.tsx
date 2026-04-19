@@ -40,10 +40,22 @@ export default function MapClient({ slug }: { slug: string }) {
   const [routesOpen, setRoutesOpen] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
   const [locating, setLocating] = useState(false);
+  const [mapStyle, setMapStyle] = useState<'street' | 'satellite'>('street');
+  const [toast, setToast] = useState<string | null>(null);
+  const [uploadStats, setUploadStats] = useState<{
+    total: number;
+    done: number;
+    gpsFound: number;
+  } | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
   const userAccuracyRef = useRef<L.Circle | null>(null);
   const userWatchIdRef = useRef<number | null>(null);
   const userCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const mapLayersRef = useRef<{
+    street: L.TileLayer;
+    satellite: L.TileLayer;
+  } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ---- Map init ----
   useEffect(() => {
@@ -64,9 +76,16 @@ export default function MapClient({ slug }: { slug: string }) {
       [13.7367, 100.5231],
       6,
     );
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
-    }).addTo(map);
+    const streetLayer = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '&copy; OpenStreetMap', maxZoom: 19 },
+    );
+    const satelliteLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: '© Esri', maxZoom: 18 },
+    );
+    streetLayer.addTo(map);
+    mapLayersRef.current = { street: streetLayer, satellite: satelliteLayer };
     L.control.zoom({ position: 'topright' }).addTo(map);
 
     const cluster = L.markerClusterGroup({
@@ -368,14 +387,18 @@ export default function MapClient({ slug }: { slug: string }) {
     // HEIC is now forwarded untouched to the backend, so no WASM contention.
     const CONCURRENCY = 2;
     setLoading(`Processing photo 0/${total}…`);
+    setUploadStats({ total, done: 0, gpsFound: 0 });
     try {
       for (let i = 0; i < list.length; i += CONCURRENCY) {
         const batch = list.slice(i, i + CONCURRENCY);
         await Promise.all(batch.map((f) => processOne(f)));
+        setUploadStats({ total, done: processed, gpsFound: added });
         await yieldToUi();
       }
     } finally {
       setLoading(null);
+      // Keep stats briefly visible, then clear
+      setTimeout(() => setUploadStats(null), 1200);
     }
 
     const parts: string[] = [];
@@ -513,246 +536,688 @@ export default function MapClient({ slug }: { slug: string }) {
     }
   };
 
+  // ---- Map style toggle ----
+  const showToast = (msg: string, duration = 2500) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), duration);
+  };
+
+  const toggleMapStyle = () => {
+    const map = mapRef.current;
+    const layers = mapLayersRef.current;
+    if (!map || !layers) return;
+    if (mapStyle === 'street') {
+      map.removeLayer(layers.street);
+      layers.satellite.addTo(map);
+      setMapStyle('satellite');
+      showToast('Satellite View');
+    } else {
+      map.removeLayer(layers.satellite);
+      layers.street.addTo(map);
+      setMapStyle('street');
+      showToast('Street Map View');
+    }
+  };
+
+  // ---- Swipe on lightbox ----
+  const touchStartX = useRef(0);
+  const onLightboxTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.changedTouches[0].screenX;
+  };
+  const onLightboxTouchEnd = (e: React.TouchEvent) => {
+    const dx = e.changedTouches[0].screenX - touchStartX.current;
+    if (dx < -40) setLightboxIdx((i) => (i < photos.length - 1 ? i + 1 : i));
+    else if (dx > 40) setLightboxIdx((i) => (i > 0 ? i - 1 : i));
+  };
+
+  // ---- Keyboard shortcuts ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (lightboxIdx >= 0) {
+        if (e.key === 'ArrowRight')
+          setLightboxIdx((i) => (i < photos.length - 1 ? i + 1 : i));
+        else if (e.key === 'ArrowLeft')
+          setLightboxIdx((i) => (i > 0 ? i - 1 : i));
+        else if (e.key === 'Escape') setLightboxIdx(-1);
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (albumOpen) setAlbumOpen(false);
+        if (routesOpen) setRoutesOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxIdx, photos.length, albumOpen, routesOpen]);
+
   // ---- UI ----
   const currentPhoto =
     lightboxIdx >= 0 && lightboxIdx < photos.length ? photos[lightboxIdx] : null;
+  const headlineFont = {
+    fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
+  };
+  const uploadPct = uploadStats
+    ? Math.round((uploadStats.done / Math.max(uploadStats.total, 1)) * 100)
+    : 0;
+  const pendingInQueue = uploadStats
+    ? uploadStats.total - uploadStats.done
+    : 0;
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-black">
+    <div className="relative h-screen w-screen overflow-hidden bg-[#faf8ff] text-[#191b24]">
       <div ref={mapElRef} className="absolute inset-0 z-0" />
 
-      {/* Top bar */}
-      <div className="absolute left-3 top-3 z-[1000] flex max-w-[70vw] items-center gap-2 rounded-full bg-white/95 px-3 py-1.5 text-sm font-semibold shadow-md">
-        <Link
-          href="/"
-          className="text-blue-600 hover:underline"
-          title="Back to events"
+      {/* ============== HEADER ============== */}
+      <header className="fixed top-0 left-0 right-0 z-[1000] flex items-center justify-between border-b border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl">
+        <div className="flex min-w-0 items-center gap-2">
+          <Link
+            href="/"
+            title="Back to events"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#424656] transition-colors hover:bg-[#ecedfa]"
+          >
+            <span className="material-symbols-outlined text-lg">arrow_back</span>
+          </Link>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <div
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md shadow-sm kinetic-gradient"
+            >
+              <span
+                className="material-symbols-outlined text-white"
+                style={{ fontSize: 13, fontVariationSettings: "'FILL' 1" }}
+              >
+                explore
+              </span>
+            </div>
+            <h1
+              className="truncate text-sm font-black uppercase tracking-tighter text-[#004cca]"
+              style={headlineFont}
+              title={event?.name ?? slug}
+            >
+              {event?.name ?? slug}
+            </h1>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <div className="hidden items-center gap-1.5 rounded-full border border-[#c2c6d9]/40 bg-[#f2f3ff] px-2.5 py-1 sm:flex">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
+            <span
+              className="text-[9px] font-bold uppercase tracking-widest text-[#004cca]"
+              style={headlineFont}
+            >
+              Live
+            </span>
+          </div>
+          <button
+            onClick={onLocateMe}
+            disabled={locating}
+            aria-label="Locate me"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-[#c2c6d9]/40 bg-[#f2f3ff] transition-colors hover:border-[#004cca]/30 hover:bg-[#004cca]/10 disabled:opacity-60"
+          >
+            <span
+              className="material-symbols-outlined text-[#004cca]"
+              style={{ fontSize: 18, fontVariationSettings: "'FILL' 1" }}
+            >
+              my_location
+            </span>
+          </button>
+          <button
+            onClick={toggleMapStyle}
+            aria-label="Toggle map style"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-[#c2c6d9]/40 bg-[#f2f3ff] transition-colors hover:bg-[#ecedfa]"
+          >
+            <span
+              className="material-symbols-outlined text-[#424656]"
+              style={{ fontSize: 18 }}
+            >
+              {mapStyle === 'street' ? 'layers' : 'map'}
+            </span>
+          </button>
+        </div>
+      </header>
+
+      {/* ============== TOAST ============== */}
+      {toast && (
+        <div
+          className="pointer-events-none fixed left-1/2 top-16 z-[3500] -translate-x-1/2 rounded-full bg-[#191b24]/90 px-4 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-md"
+          style={{ fontFamily: 'Inter, sans-serif' }}
         >
-          ←
-        </Link>
-        <span className="truncate">
-          {event?.name ?? slug}
-        </span>
-        <span className="text-xs font-normal text-zinc-500">/{slug}</span>
-      </div>
+          {toast}
+        </div>
+      )}
 
-      {/* Locate me button */}
-      <button
-        onClick={onLocateMe}
-        disabled={locating}
-        title="Show my location"
-        className="absolute right-3 top-16 z-[1000] flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-lg shadow-md hover:bg-white disabled:opacity-60"
+      {/* ============== BOTTOM PANEL ============== */}
+      <div
+        className="fixed bottom-0 left-0 right-0 z-[1000] px-3 pb-3"
+        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
-        {locating ? '…' : '📍'}
-      </button>
+        <div className="mx-auto max-w-sm">
+          {/* Stats chips */}
+          {(routes.length > 0 || photos.length > 0) && (
+            <div className="mb-2 flex flex-wrap justify-center gap-2">
+              {routes.length > 0 && (
+                <div className="flex items-center gap-1.5 rounded-full border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-1 shadow-sm backdrop-blur-xl">
+                  <span
+                    className="material-symbols-outlined text-[#004cca]"
+                    style={{ fontSize: 14, fontVariationSettings: "'FILL' 1" }}
+                  >
+                    route
+                  </span>
+                  <span
+                    className="text-xs font-bold text-[#191b24]"
+                    style={headlineFont}
+                  >
+                    {routes.length}
+                  </span>
+                  <span className="text-[9px] uppercase tracking-wider text-[#424656]">
+                    Tracks
+                  </span>
+                </div>
+              )}
+              {photos.length > 0 && (
+                <div className="flex items-center gap-1.5 rounded-full border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-1 shadow-sm backdrop-blur-xl">
+                  <span
+                    className="material-symbols-outlined text-[#004cca]"
+                    style={{ fontSize: 14, fontVariationSettings: "'FILL' 1" }}
+                  >
+                    photo_library
+                  </span>
+                  <span
+                    className="text-xs font-bold text-[#191b24]"
+                    style={headlineFont}
+                  >
+                    {photos.length}
+                  </span>
+                  <span className="text-[9px] uppercase tracking-wider text-[#424656]">
+                    Photos
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
-      {/* Bottom floating panel */}
-      <div className="absolute bottom-3 left-1/2 z-[1000] w-[96%] max-w-md -translate-x-1/2 rounded-xl bg-white/98 p-2 shadow-lg">
-        <div className="grid grid-cols-4 gap-1.5">
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 py-2 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100">
-            <span className="text-base">🗺️</span>
-            <span>Add GPX</span>
-            <input
-              type="file"
-              accept=".gpx"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                void onUploadGpx(e.target.files);
-                e.currentTarget.value = '';
-              }}
-            />
-          </label>
+          {/* Upload progress card */}
+          {uploadStats && (
+            <div className="mb-2 rounded-xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl">
+              <div className="mb-1.5 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="material-symbols-outlined text-sm text-[#004cca]"
+                    style={{ animation: 'spin 1s linear infinite' }}
+                  >
+                    sync
+                  </span>
+                  <span className="text-[10px] text-[#424656]">
+                    กำลังประมวลผล {uploadStats.total} ภาพ…
+                  </span>
+                </div>
+                <span
+                  className="text-xs font-bold text-[#004cca]"
+                  style={headlineFont}
+                >
+                  {uploadPct}%
+                </span>
+              </div>
+              <div className="h-1 overflow-hidden rounded-full bg-[#e1e2ee]">
+                <div
+                  className="h-full rounded-full transition-[width] duration-200 ease-out"
+                  style={{
+                    width: `${uploadPct}%`,
+                    background:
+                      'linear-gradient(90deg,#004cca,#0062ff)',
+                  }}
+                />
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span className="text-[9px] text-[#424656]">
+                  {uploadStats.done} / {uploadStats.total} ภาพ
+                </span>
+                <span className="text-[9px] font-semibold text-green-600">
+                  {uploadStats.gpsFound} เสร็จแล้ว
+                </span>
+              </div>
+            </div>
+          )}
 
-          <button
-            onClick={() => setRoutesOpen(true)}
-            className="flex flex-col items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 py-2 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100"
-          >
-            <span className="text-base">⛓️</span>
-            <span>
-              Routes <b>({routes.length})</b>
-            </span>
-          </button>
+          {/* Main panel */}
+          <div className="rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 p-3 shadow-xl backdrop-blur-xl">
+            <div className="mb-3 grid grid-cols-4 gap-2">
+              {/* GPX Upload */}
+              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-[#004cca]/20 bg-[#004cca]/[0.08] p-2.5 transition-all hover:bg-[#004cca]/15 active:scale-95">
+                <span
+                  className="material-symbols-outlined text-2xl text-[#004cca]"
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  map
+                </span>
+                <span
+                  className="text-[8px] font-bold uppercase tracking-wider text-[#004cca]"
+                  style={headlineFont}
+                >
+                  GPX
+                </span>
+                <input
+                  type="file"
+                  accept=".gpx"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    void onUploadGpx(e.target.files);
+                    e.currentTarget.value = '';
+                  }}
+                />
+              </label>
 
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 py-2 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100">
-            <span className="text-base">📸</span>
-            <span>Add photo</span>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                void onUploadPhotos(e.target.files);
-                e.currentTarget.value = '';
-              }}
-            />
-          </label>
+              {/* Tracks list */}
+              <button
+                onClick={() => setRoutesOpen(true)}
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2.5 transition-all hover:bg-[#e7e7f4] active:scale-95"
+              >
+                <span className="material-symbols-outlined text-2xl text-[#424656]">
+                  route
+                </span>
+                <span
+                  className="text-[8px] font-bold uppercase tracking-wider text-[#424656]"
+                  style={headlineFont}
+                >
+                  Tracks
+                </span>
+                {routes.length > 0 && (
+                  <span
+                    className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#004cca] px-1 text-[9px] font-bold text-white"
+                    style={headlineFont}
+                  >
+                    {routes.length}
+                  </span>
+                )}
+              </button>
 
-          <button
-            onClick={() => setAlbumOpen(true)}
-            className="flex flex-col items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 py-2 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-100"
-          >
-            <span className="text-base">🖼️</span>
-            <span>
-              Photos <b>({photos.length})</b>
-            </span>
-          </button>
-        </div>
-        <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-zinc-600">
-          <span>🔍 small</span>
-          <input
-            type="range"
-            min={20}
-            max={90}
-            value={markerSize}
-            onChange={(e) => setMarkerSize(parseInt(e.target.value, 10))}
-            className="flex-1 accent-blue-600"
-          />
-          <span>big 🔎</span>
+              {/* Photo upload */}
+              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl p-2.5 shadow-md transition-transform active:scale-95 kinetic-gradient">
+                <span
+                  className="material-symbols-outlined text-2xl text-white"
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  add_a_photo
+                </span>
+                <span
+                  className="text-[8px] font-bold uppercase tracking-wider text-white"
+                  style={headlineFont}
+                >
+                  Photo
+                </span>
+                {pendingInQueue > 0 && (
+                  <span
+                    className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-yellow-500 px-1 text-[9px] font-bold text-white"
+                    style={headlineFont}
+                  >
+                    {pendingInQueue}
+                  </span>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    void onUploadPhotos(e.target.files);
+                    e.currentTarget.value = '';
+                  }}
+                />
+              </label>
+
+              {/* Album */}
+              <button
+                onClick={() => setAlbumOpen(true)}
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2.5 transition-all hover:bg-[#e7e7f4] active:scale-95"
+              >
+                <span
+                  className="material-symbols-outlined text-2xl text-[#424656]"
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  photo_library
+                </span>
+                <span
+                  className="text-[8px] font-bold uppercase tracking-wider text-[#424656]"
+                  style={headlineFont}
+                >
+                  Album
+                </span>
+                {photos.length > 0 && (
+                  <span
+                    className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#004cca] px-1 text-[9px] font-bold text-white"
+                    style={headlineFont}
+                  >
+                    {photos.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Marker slider */}
+            <div className="flex items-center gap-3 px-1">
+              <span className="material-symbols-outlined text-base text-[#737687]">
+                zoom_out
+              </span>
+              <input
+                type="range"
+                min={20}
+                max={90}
+                value={markerSize}
+                onChange={(e) => setMarkerSize(parseInt(e.target.value, 10))}
+                className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full"
+                style={{
+                  accentColor: '#004cca',
+                  background: `linear-gradient(to right,#004cca 0%,#004cca ${
+                    ((markerSize - 20) / 70) * 100
+                  }%,#e1e2ee ${
+                    ((markerSize - 20) / 70) * 100
+                  }%,#e1e2ee 100%)`,
+                }}
+              />
+              <span className="material-symbols-outlined text-base text-[#737687]">
+                zoom_in
+              </span>
+              <span className="w-6 text-right text-[9px] text-[#424656]">
+                {markerSize}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Loading overlay */}
-      {loading && (
-        <div className="absolute inset-0 z-[4000] flex items-center justify-center bg-black/50 text-sm font-bold text-white">
+      {/* ============== LOADING (initial only) ============== */}
+      {loading && !uploadStats && (
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/50 text-sm font-bold text-white">
           {loading}
         </div>
       )}
       {error && (
-        <div className="absolute left-1/2 top-20 z-[2000] -translate-x-1/2 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
+        <div className="fixed left-1/2 top-20 z-[2000] -translate-x-1/2 rounded-md bg-red-600 px-4 py-2 text-sm text-white shadow-lg">
           {error}
         </div>
       )}
 
-      {/* Routes modal */}
+      {/* ============== ROUTES MODAL ============== */}
       {routesOpen && (
-        <Modal title="Routes" onClose={() => setRoutesOpen(false)}>
-          {routes.length === 0 ? (
-            <p className="p-5 text-sm text-zinc-500">No routes yet.</p>
-          ) : (
-            <ul className="divide-y divide-zinc-100">
-              {routes.map((r) => (
-                <li
+        <Modal
+          title="GPX Tracks"
+          subtitle={`${routes.length} track${routes.length !== 1 ? 's' : ''} loaded`}
+          icon="route"
+          onClose={() => setRoutesOpen(false)}
+        >
+          <div className="flex-shrink-0 px-4 pb-2 pt-3">
+            <label className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#004cca]/20 bg-[#004cca]/[0.08] py-2.5 transition-colors hover:bg-[#004cca]/15">
+              <span
+                className="material-symbols-outlined text-lg text-[#004cca]"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                add_circle
+              </span>
+              <span
+                className="text-xs font-semibold text-[#004cca]"
+                style={{ fontFamily: 'Inter, sans-serif' }}
+              >
+                เพิ่มไฟล์ GPX
+              </span>
+              <input
+                type="file"
+                accept=".gpx"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  void onUploadGpx(e.target.files);
+                  e.currentTarget.value = '';
+                }}
+              />
+            </label>
+          </div>
+          <div className="flex-1 space-y-2 overflow-y-auto px-4 py-2">
+            {routes.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-12">
+                <span className="material-symbols-outlined text-4xl text-[#737687]">
+                  route
+                </span>
+                <p className="text-sm text-[#737687]">ยังไม่มี Track</p>
+              </div>
+            ) : (
+              routes.map((r, i) => (
+                <div
                   key={r._id}
-                  className="flex items-center justify-between text-sm hover:bg-zinc-50 transition-colors cursor-pointer active:bg-zinc-100"
-                  onClick={() => {
-                    const layer = routeLayersRef.current.get(r._id);
-                    if (layer && mapRef.current) {
-                      try {
-                        const bounds = (layer as L.Layer & { getBounds?: () => L.LatLngBounds }).getBounds?.();
-                        if (bounds) mapRef.current.fitBounds(bounds, { padding: [30, 30] });
-                      } catch { /* no-op */ }
-                    }
-                    setRoutesOpen(false);
-                  }}
+                  className="flex items-center gap-3 rounded-xl border border-[#c2c6d9]/30 bg-[#f2f3ff] p-3"
                 >
-                  <span className="flex min-w-0 items-center gap-2 px-4 py-3 flex-1">
+                  <button
+                    onClick={() => {
+                      const layer = routeLayersRef.current.get(r._id);
+                      if (layer && mapRef.current) {
+                        try {
+                          const bounds = (
+                            layer as L.Layer & {
+                              getBounds?: () => L.LatLngBounds;
+                            }
+                          ).getBounds?.();
+                          if (bounds)
+                            mapRef.current.fitBounds(bounds, {
+                              padding: [30, 30],
+                            });
+                        } catch {
+                          /* no-op */
+                        }
+                      }
+                      setRoutesOpen(false);
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  >
                     <span
-                      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
                       style={{ background: r.color }}
                     />
-                    <span className="truncate">{r.name}</span>
-                  </span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDeleteRoute(r._id); }}
-                    className="text-xs font-semibold text-red-600 hover:underline px-4 py-3 shrink-0"
-                  >
-                    Delete
+                    <div className="min-w-0">
+                      <div
+                        className="truncate text-xs font-semibold text-[#191b24]"
+                        style={{ fontFamily: 'Inter, sans-serif' }}
+                      >
+                        {r.name}
+                      </div>
+                      <div
+                        className="text-[9px] uppercase tracking-wider text-[#424656]"
+                        style={headlineFont}
+                      >
+                        Track {i + 1}
+                      </div>
+                    </div>
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                  <button
+                    onClick={() => onDeleteRoute(r._id)}
+                    aria-label="Delete track"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ffdad6] transition-colors hover:bg-[#ba1a1a]/20"
+                  >
+                    <span
+                      className="material-symbols-outlined text-[#ba1a1a]"
+                      style={{ fontSize: 15, fontVariationSettings: "'FILL' 1" }}
+                    >
+                      delete
+                    </span>
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         </Modal>
       )}
 
-      {/* Album modal */}
+      {/* ============== ALBUM MODAL ============== */}
       {albumOpen && (
         <Modal
-          title={`Photos (${photos.length})`}
+          title="ภาพถ่ายทั้งหมด"
+          subtitle={`${photos.length} photo${photos.length !== 1 ? 's' : ''}`}
+          icon="photo_library"
           onClose={() => setAlbumOpen(false)}
         >
-          {photos.length === 0 ? (
-            <p className="p-5 text-sm text-zinc-500">No photos yet.</p>
-          ) : (
-            <div className="grid grid-cols-4 gap-px overflow-y-auto">
-              {photos.map((p, i) => (
-                <button
-                  key={p._id}
-                  onClick={() => {
-                    setAlbumOpen(false);
-                    mapRef.current?.setView([p.lat, p.lng], 18);
-                    setTimeout(() => setLightboxIdx(i), 350);
-                  }}
-                  className="aspect-square bg-zinc-200 bg-cover bg-center"
-                  style={{ backgroundImage: `url('${p.url}')` }}
-                  aria-label={`Photo ${i + 1}`}
-                />
-              ))}
-            </div>
-          )}
+          <div className="flex-1 overflow-y-auto">
+            {photos.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-16">
+                <span className="material-symbols-outlined text-4xl text-[#737687]">
+                  photo_library
+                </span>
+                <p className="text-sm text-[#737687]">ยังไม่มีภาพ</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-0.5">
+                {photos.map((p, i) => (
+                  <button
+                    key={p._id}
+                    onClick={() => {
+                      setAlbumOpen(false);
+                      mapRef.current?.setView([p.lat, p.lng], 18);
+                      setTimeout(() => setLightboxIdx(i), 350);
+                    }}
+                    className="aspect-square bg-[#e1e2ee] bg-cover bg-center transition-opacity hover:opacity-85"
+                    style={{ backgroundImage: `url('${p.url}')` }}
+                    aria-label={`Photo ${i + 1}`}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </Modal>
       )}
 
-      {/* Lightbox */}
+      {/* ============== LIGHTBOX ============== */}
       {currentPhoto && (
-        <div className="absolute inset-0 z-[3000] flex flex-col items-center justify-center bg-black/95">
-          <div className="absolute top-3 flex w-[92%] max-w-3xl items-center justify-between">
+        <div
+          className="fixed inset-0 z-[3000] flex flex-col items-center justify-center bg-[#191b24]/97"
+          onTouchStart={onLightboxTouchStart}
+          onTouchEnd={onLightboxTouchEnd}
+        >
+          {/* Top bar */}
+          <div
+            className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between px-4 py-3"
+            style={{
+              background:
+                'linear-gradient(to bottom,rgba(25,27,36,0.85),transparent)',
+            }}
+          >
             <button
               onClick={() => setLightboxIdx(-1)}
-              className="rounded-md bg-white/90 px-3 py-1.5 text-xs font-semibold"
+              className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 backdrop-blur-sm transition-colors hover:bg-white/20"
             >
-              Close
+              <span className="material-symbols-outlined text-sm text-white">
+                arrow_back
+              </span>
+              <span
+                className="text-xs font-medium text-white"
+                style={{ fontFamily: 'Inter, sans-serif' }}
+              >
+                Back
+              </span>
             </button>
+            <div className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 backdrop-blur-sm">
+              <span
+                className="text-xs font-bold text-white"
+                style={headlineFont}
+              >
+                {lightboxIdx + 1} / {photos.length}
+              </span>
+            </div>
             <button
               onClick={async () => {
                 await onDeletePhoto(currentPhoto._id);
-                // After delete, socket will remove it from list; shift index.
                 setLightboxIdx((idx) => {
-                  const next = idx >= photos.length - 1 ? photos.length - 2 : idx;
+                  const next =
+                    idx >= photos.length - 1 ? photos.length - 2 : idx;
                   return next < 0 ? -1 : next;
                 });
               }}
-              className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
+              className="flex items-center gap-1.5 rounded-full border border-[#ba1a1a]/30 bg-[#ba1a1a]/70 px-3 py-1.5 backdrop-blur-sm transition-colors hover:bg-[#ba1a1a]/90"
             >
-              Delete
+              <span className="material-symbols-outlined text-sm text-white">
+                delete
+              </span>
+              <span
+                className="text-xs font-medium text-white"
+                style={{ fontFamily: 'Inter, sans-serif' }}
+              >
+                ลบ
+              </span>
             </button>
           </div>
 
+          {/* Prev / Next */}
           <button
-            onClick={() =>
-              setLightboxIdx((i) => (i > 0 ? i - 1 : i))
-            }
-            className="absolute left-4 top-1/2 z-[3003] flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-xl font-bold text-white"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxIdx((i) => (i > 0 ? i - 1 : i));
+            }}
             aria-label="Previous"
+            className="absolute left-3 top-1/2 z-[3003] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-white/12 backdrop-blur-sm transition-colors hover:bg-white/20"
           >
-            ‹
+            <span className="material-symbols-outlined text-xl text-white">
+              chevron_left
+            </span>
           </button>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={currentPhoto.url}
             alt=""
-            className="max-h-[75vh] max-w-full object-contain"
+            className="max-h-[68vh] max-w-[94vw] rounded-xl object-contain shadow-2xl"
           />
           <button
-            onClick={() =>
-              setLightboxIdx((i) => (i < photos.length - 1 ? i + 1 : i))
-            }
-            className="absolute right-4 top-1/2 z-[3003] flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-xl font-bold text-white"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxIdx((i) => (i < photos.length - 1 ? i + 1 : i));
+            }}
             aria-label="Next"
+            className="absolute right-3 top-1/2 z-[3003] flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-white/12 backdrop-blur-sm transition-colors hover:bg-white/20"
           >
-            ›
+            <span className="material-symbols-outlined text-xl text-white">
+              chevron_right
+            </span>
           </button>
 
-          <a
-            href={`https://www.google.com/maps?q=${currentPhoto.lat},${currentPhoto.lng}`}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-4 flex items-center gap-1 rounded-full bg-white px-4 py-2 text-xs font-bold text-blue-600 shadow-lg"
+          {/* Bottom meta */}
+          <div
+            className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-3 px-4 pb-8 pt-4"
+            style={{
+              background:
+                'linear-gradient(to top,rgba(25,27,36,0.85),transparent)',
+            }}
           >
-            📍 View in Google Maps
-          </a>
+            <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1">
+              <span
+                className="material-symbols-outlined text-sm text-white/70"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                location_on
+              </span>
+              <span
+                className="text-[10px] text-white/70"
+                style={{ fontFamily: 'Inter, sans-serif' }}
+              >
+                {currentPhoto.lat.toFixed(5)}, {currentPhoto.lng.toFixed(5)}
+              </span>
+            </div>
+            <a
+              href={`https://www.google.com/maps?q=${currentPhoto.lat},${currentPhoto.lng}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-2 rounded-full border border-white/20 bg-white/12 px-5 py-2.5 backdrop-blur-sm transition-colors hover:bg-white/20"
+            >
+              <span
+                className="material-symbols-outlined text-base text-white"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                open_in_new
+              </span>
+              <span
+                className="text-xs font-bold uppercase tracking-wider text-white"
+                style={headlineFont}
+              >
+                View in Google Maps
+              </span>
+            </a>
+          </div>
         </div>
       )}
     </div>
@@ -761,26 +1226,68 @@ export default function MapClient({ slug }: { slug: string }) {
 
 function Modal({
   title,
+  subtitle,
+  icon,
   onClose,
   children,
 }: {
   title: string;
+  subtitle?: string;
+  icon?: string;
   onClose: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <div className="absolute inset-0 z-[2000] flex flex-col bg-white">
-      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
+    <div className="fixed inset-0 z-[2000] flex flex-col bg-[#faf8ff]">
+      <div className="flex flex-shrink-0 items-center justify-between border-b border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-4 py-3 backdrop-blur-xl">
+        <div className="flex items-center gap-2">
+          {icon && (
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg shadow-sm kinetic-gradient">
+              <span
+                className="material-symbols-outlined text-sm text-white"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                {icon}
+              </span>
+            </div>
+          )}
+          <div>
+            <h3
+              className="text-sm font-bold text-[#191b24]"
+              style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+            >
+              {title}
+            </h3>
+            {subtitle && (
+              <p className="text-[10px] text-[#424656]">{subtitle}</p>
+            )}
+          </div>
+        </div>
         <button
           onClick={onClose}
-          className="text-xl font-bold text-zinc-500 hover:text-zinc-900"
           aria-label="Close"
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ecedfa] transition-colors hover:bg-[#e7e7f4]"
         >
-          ✕
+          <span className="material-symbols-outlined text-lg text-[#424656]">
+            close
+          </span>
         </button>
       </div>
-      <div className="flex-1 overflow-auto">{children}</div>
+      <div className="flex flex-1 flex-col overflow-hidden">{children}</div>
     </div>
   );
 }
+
+/* Spin keyframes for the progress icon. Added once globally. */
+const spinStyle =
+  typeof document !== 'undefined' &&
+  !document.getElementById('gpx-spin-keyframes')
+    ? (() => {
+        const el = document.createElement('style');
+        el.id = 'gpx-spin-keyframes';
+        el.textContent = `@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`;
+        document.head.appendChild(el);
+        return true;
+      })()
+    : true;
+void spinStyle;
