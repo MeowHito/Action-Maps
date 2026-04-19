@@ -13,6 +13,152 @@ import type { EventDoc, PhotoDoc, RouteDoc } from '@/lib/types';
 type MarkerClusterGroup = L.MarkerClusterGroup;
 type AnyMarker = L.Marker & { _photoId?: string; options: L.MarkerOptions & { imgUrl?: string } };
 
+type RouteStats = {
+  distanceKm: number;
+  elevGain: number;
+  elevLoss: number;
+  minEle: number;
+  maxEle: number;
+  /** Sampled cumulative distance (km) + elevation (m) for the mini chart. */
+  profile: { d: number; e: number }[];
+};
+
+function haversineKm(a: [number, number], b: [number, number]) {
+  const R = 6371;
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const dLat = toRad(b[0] - a[0]);
+  const dLon = toRad(b[1] - a[1]);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function parseGpxStats(text: string): RouteStats | null {
+  try {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const pts = Array.from(doc.getElementsByTagName('trkpt'));
+    if (pts.length < 2) return null;
+    let dist = 0;
+    let gain = 0;
+    let loss = 0;
+    let minE = Infinity;
+    let maxE = -Infinity;
+    const raw: { d: number; e: number }[] = [];
+    let prevLatLng: [number, number] | null = null;
+    let prevEle: number | null = null;
+    for (const p of pts) {
+      const lat = parseFloat(p.getAttribute('lat') || 'NaN');
+      const lon = parseFloat(p.getAttribute('lon') || 'NaN');
+      if (Number.isNaN(lat) || Number.isNaN(lon)) continue;
+      const eleNode = p.getElementsByTagName('ele')[0];
+      const ele = eleNode ? parseFloat(eleNode.textContent || 'NaN') : NaN;
+      if (prevLatLng) dist += haversineKm(prevLatLng, [lat, lon]);
+      if (!Number.isNaN(ele)) {
+        if (prevEle !== null) {
+          const d = ele - prevEle;
+          if (d > 0.5) gain += d;
+          else if (d < -0.5) loss += -d;
+        }
+        if (ele < minE) minE = ele;
+        if (ele > maxE) maxE = ele;
+        prevEle = ele;
+        raw.push({ d: dist, e: ele });
+      }
+      prevLatLng = [lat, lon];
+    }
+    // Downsample to ~80 points for chart
+    const maxPts = 80;
+    const step = Math.max(1, Math.ceil(raw.length / maxPts));
+    const profile: { d: number; e: number }[] = [];
+    for (let i = 0; i < raw.length; i += step) profile.push(raw[i]);
+    if (raw.length && profile[profile.length - 1] !== raw[raw.length - 1])
+      profile.push(raw[raw.length - 1]);
+    return {
+      distanceKm: dist,
+      elevGain: Math.round(gain),
+      elevLoss: Math.round(loss),
+      minEle: Number.isFinite(minE) ? Math.round(minE) : 0,
+      maxEle: Number.isFinite(maxE) ? Math.round(maxE) : 0,
+      profile,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function StatCell({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  return (
+    <div className="rounded-lg bg-white px-1.5 py-1 text-center">
+      <div
+        className="text-[9px] uppercase tracking-wider text-[#737687]"
+        style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+      >
+        {label}
+      </div>
+      <div
+        className="text-[11px] font-bold"
+        style={{
+          fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
+          color: color ?? '#191b24',
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ElevationChart({
+  profile,
+  color,
+  minEle,
+  maxEle,
+}: {
+  profile: { d: number; e: number }[];
+  color: string;
+  minEle: number;
+  maxEle: number;
+}) {
+  const W = 300;
+  const H = 60;
+  const pad = 4;
+  const maxD = profile[profile.length - 1]?.d || 1;
+  const range = Math.max(1, maxEle - minEle);
+  const xy = profile.map((p) => {
+    const x = pad + ((p.d / maxD) * (W - pad * 2));
+    const y = pad + (1 - (p.e - minEle) / range) * (H - pad * 2);
+    return [x, y] as const;
+  });
+  const line = xy.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${H - pad} L${xy[0][0].toFixed(1)},${H - pad} Z`;
+  return (
+    <div className="mt-2 rounded-lg bg-white p-1.5">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="h-14 w-full"
+        aria-label="Elevation profile"
+      >
+        <path d={area} fill={color} opacity={0.18} />
+        <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <div className="mt-0.5 flex justify-between px-1 text-[8px] text-[#737687]">
+        <span>{minEle} m</span>
+        <span>{maxEle} m</span>
+      </div>
+    </div>
+  );
+}
+
 const TRACK_COLORS = [
   '#ff4d4d',
   '#33cc33',
@@ -33,7 +179,9 @@ export default function MapClient({ slug }: { slug: string }) {
   const [event, setEvent] = useState<EventDoc | null>(null);
   const [photos, setPhotos] = useState<PhotoDoc[]>([]);
   const [routes, setRoutes] = useState<RouteDoc[]>([]);
-  const [markerSize, setMarkerSize] = useState(45);
+  const [routeStats, setRouteStats] = useState<Record<string, RouteStats>>({});
+  const [markerSize] = useState(45);
+  const [zoomLevel, setZoomLevel] = useState(6);
   const [loading, setLoading] = useState<string | null>('Loading event…');
   const [error, setError] = useState<string | null>(null);
   const [albumOpen, setAlbumOpen] = useState(false);
@@ -86,7 +234,6 @@ export default function MapClient({ slug }: { slug: string }) {
     );
     streetLayer.addTo(map);
     mapLayersRef.current = { street: streetLayer, satellite: satelliteLayer };
-    L.control.zoom({ position: 'topright' }).addTo(map);
 
     const cluster = L.markerClusterGroup({
       showCoverageOnHover: false,
@@ -104,6 +251,8 @@ export default function MapClient({ slug }: { slug: string }) {
 
     mapRef.current = map;
     clusterRef.current = cluster;
+    setZoomLevel(map.getZoom());
+    map.on('zoomend', () => setZoomLevel(map.getZoom()));
 
     return () => {
       map.remove();
@@ -169,6 +318,8 @@ export default function MapClient({ slug }: { slug: string }) {
     try {
       const res = await fetch(r.url);
       const text = await res.text();
+      const stats = parseGpxStats(text);
+      if (stats) setRouteStats((cur) => ({ ...cur, [r._id]: stats }));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const GPX = (L as any).GPX as new (
         data: string,
@@ -199,6 +350,12 @@ export default function MapClient({ slug }: { slug: string }) {
     const layer = routeLayersRef.current.get(id);
     if (layer && map) map.removeLayer(layer);
     routeLayersRef.current.delete(id);
+    setRouteStats((cur) => {
+      if (!(id in cur)) return cur;
+      const next = { ...cur };
+      delete next[id];
+      return next;
+    });
   }, []);
 
   // ---- Initial data load ----
@@ -693,50 +850,6 @@ export default function MapClient({ slug }: { slug: string }) {
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
         <div className="mx-auto max-w-sm">
-          {/* Stats chips */}
-          {(routes.length > 0 || photos.length > 0) && (
-            <div className="mb-2 flex flex-wrap justify-center gap-2">
-              {routes.length > 0 && (
-                <div className="flex items-center gap-1.5 rounded-full border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-1 shadow-sm backdrop-blur-xl">
-                  <span
-                    className="material-symbols-outlined text-[#004cca]"
-                    style={{ fontSize: 14, fontVariationSettings: "'FILL' 1" }}
-                  >
-                    route
-                  </span>
-                  <span
-                    className="text-xs font-bold text-[#191b24]"
-                    style={headlineFont}
-                  >
-                    {routes.length}
-                  </span>
-                  <span className="text-[9px] uppercase tracking-wider text-[#424656]">
-                    Tracks
-                  </span>
-                </div>
-              )}
-              {photos.length > 0 && (
-                <div className="flex items-center gap-1.5 rounded-full border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-1 shadow-sm backdrop-blur-xl">
-                  <span
-                    className="material-symbols-outlined text-[#004cca]"
-                    style={{ fontSize: 14, fontVariationSettings: "'FILL' 1" }}
-                  >
-                    photo_library
-                  </span>
-                  <span
-                    className="text-xs font-bold text-[#191b24]"
-                    style={headlineFont}
-                  >
-                    {photos.length}
-                  </span>
-                  <span className="text-[9px] uppercase tracking-wider text-[#424656]">
-                    Photos
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Upload progress card */}
           {uploadStats && (
             <div className="mb-2 rounded-xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl">
@@ -895,24 +1008,29 @@ export default function MapClient({ slug }: { slug: string }) {
               </button>
             </div>
 
-            {/* Marker slider */}
+            {/* Map zoom slider */}
             <div className="flex items-center gap-3 px-1">
               <span className="material-symbols-outlined text-base text-[#737687]">
                 zoom_out
               </span>
               <input
                 type="range"
-                min={20}
-                max={90}
-                value={markerSize}
-                onChange={(e) => setMarkerSize(parseInt(e.target.value, 10))}
+                min={3}
+                max={19}
+                step={1}
+                value={zoomLevel}
+                onChange={(e) => {
+                  const z = parseInt(e.target.value, 10);
+                  setZoomLevel(z);
+                  mapRef.current?.setZoom(z);
+                }}
                 className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full"
                 style={{
                   accentColor: '#004cca',
                   background: `linear-gradient(to right,#004cca 0%,#004cca ${
-                    ((markerSize - 20) / 70) * 100
+                    ((zoomLevel - 3) / 16) * 100
                   }%,#e1e2ee ${
-                    ((markerSize - 20) / 70) * 100
+                    ((zoomLevel - 3) / 16) * 100
                   }%,#e1e2ee 100%)`,
                 }}
               />
@@ -920,7 +1038,7 @@ export default function MapClient({ slug }: { slug: string }) {
                 zoom_in
               </span>
               <span className="w-6 text-right text-[9px] text-[#424656]">
-                {markerSize}
+                {zoomLevel}
               </span>
             </div>
           </div>
@@ -982,66 +1100,142 @@ export default function MapClient({ slug }: { slug: string }) {
                 <p className="text-sm text-[#737687]">ยังไม่มี Track</p>
               </div>
             ) : (
-              routes.map((r, i) => (
-                <div
-                  key={r._id}
-                  className="flex items-center gap-3 rounded-xl border border-[#c2c6d9]/30 bg-[#f2f3ff] p-3"
-                >
-                  <button
-                    onClick={() => {
-                      const layer = routeLayersRef.current.get(r._id);
-                      if (layer && mapRef.current) {
-                        try {
-                          const bounds = (
-                            layer as L.Layer & {
-                              getBounds?: () => L.LatLngBounds;
-                            }
-                          ).getBounds?.();
-                          if (bounds)
-                            mapRef.current.fitBounds(bounds, {
-                              padding: [30, 30],
-                            });
-                        } catch {
-                          /* no-op */
-                        }
-                      }
-                      setRoutesOpen(false);
-                    }}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                  >
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ background: r.color }}
-                    />
-                    <div className="min-w-0">
-                      <div
-                        className="truncate text-xs font-semibold text-[#191b24]"
-                        style={{ fontFamily: 'Inter, sans-serif' }}
-                      >
-                        {r.name}
+              <>
+                {(() => {
+                  const totals = Object.values(routeStats).reduce(
+                    (acc, s) => ({
+                      d: acc.d + s.distanceKm,
+                      up: acc.up + s.elevGain,
+                      down: acc.down + s.elevLoss,
+                    }),
+                    { d: 0, up: 0, down: 0 },
+                  );
+                  if (!Object.keys(routeStats).length) return null;
+                  return (
+                    <div className="mb-1 grid grid-cols-3 gap-2 rounded-xl border border-[#c2c6d9]/30 bg-white p-2.5">
+                      <div className="text-center">
+                        <div className="text-[9px] uppercase tracking-wider text-[#737687]" style={headlineFont}>
+                          Total
+                        </div>
+                        <div className="text-sm font-bold text-[#191b24]" style={headlineFont}>
+                          {totals.d.toFixed(1)}<span className="text-[10px] font-semibold text-[#737687]"> km</span>
+                        </div>
                       </div>
-                      <div
-                        className="text-[9px] uppercase tracking-wider text-[#424656]"
-                        style={headlineFont}
-                      >
-                        Track {i + 1}
+                      <div className="text-center">
+                        <div className="text-[9px] uppercase tracking-wider text-[#737687]" style={headlineFont}>
+                          Gain
+                        </div>
+                        <div className="text-sm font-bold text-[#17803d]" style={headlineFont}>
+                          ↑ {totals.up}<span className="text-[10px] font-semibold text-[#737687]"> m</span>
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-[9px] uppercase tracking-wider text-[#737687]" style={headlineFont}>
+                          Loss
+                        </div>
+                        <div className="text-sm font-bold text-[#ba1a1a]" style={headlineFont}>
+                          ↓ {totals.down}<span className="text-[10px] font-semibold text-[#737687]"> m</span>
+                        </div>
                       </div>
                     </div>
-                  </button>
-                  <button
-                    onClick={() => onDeleteRoute(r._id)}
-                    aria-label="Delete track"
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ffdad6] transition-colors hover:bg-[#ba1a1a]/20"
-                  >
-                    <span
-                      className="material-symbols-outlined text-[#ba1a1a]"
-                      style={{ fontSize: 15, fontVariationSettings: "'FILL' 1" }}
+                  );
+                })()}
+                {routes.map((r, i) => {
+                const st = routeStats[r._id];
+                return (
+                <div
+                  key={r._id}
+                  className="rounded-xl border border-[#c2c6d9]/30 bg-[#f2f3ff] p-3"
+                >
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        const layer = routeLayersRef.current.get(r._id);
+                        if (layer && mapRef.current) {
+                          try {
+                            const bounds = (
+                              layer as L.Layer & {
+                                getBounds?: () => L.LatLngBounds;
+                              }
+                            ).getBounds?.();
+                            if (bounds)
+                              mapRef.current.fitBounds(bounds, {
+                                padding: [30, 30],
+                              });
+                          } catch {
+                            /* no-op */
+                          }
+                        }
+                        setRoutesOpen(false);
+                      }}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
-                      delete
-                    </span>
-                  </button>
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ background: r.color }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className="truncate text-xs font-semibold text-[#191b24]"
+                          style={{ fontFamily: 'Inter, sans-serif' }}
+                        >
+                          {r.name}
+                        </div>
+                        <div
+                          className="text-[9px] uppercase tracking-wider text-[#424656]"
+                          style={headlineFont}
+                        >
+                          Track {i + 1}
+                        </div>
+                      </div>
+                      {st && (
+                        <span
+                          className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[#004cca] shadow-sm"
+                          style={headlineFont}
+                          title="Distance"
+                        >
+                          {st.distanceKm.toFixed(2)} km
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => onDeleteRoute(r._id)}
+                      aria-label="Delete track"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ffdad6] transition-colors hover:bg-[#ba1a1a]/20"
+                    >
+                      <span
+                        className="material-symbols-outlined text-[#ba1a1a]"
+                        style={{ fontSize: 15, fontVariationSettings: "'FILL' 1" }}
+                      >
+                        delete
+                      </span>
+                    </button>
+                  </div>
+
+                  {st && (
+                    <>
+                      {/* Stats panel */}
+                      <div className="mt-2 grid grid-cols-4 gap-1.5">
+                        <StatCell label="Dist" value={`${st.distanceKm.toFixed(2)} km`} />
+                        <StatCell label="↑ Gain" value={`${st.elevGain} m`} color="#17803d" />
+                        <StatCell label="↓ Loss" value={`${st.elevLoss} m`} color="#ba1a1a" />
+                        <StatCell label="Max" value={`${st.maxEle} m`} />
+                      </div>
+                      {/* Elevation chart */}
+                      {st.profile.length > 2 && (
+                        <ElevationChart
+                          profile={st.profile}
+                          color={r.color}
+                          minEle={st.minEle}
+                          maxEle={st.maxEle}
+                        />
+                      )}
+                    </>
+                  )}
                 </div>
-              ))
+                );
+                })}
+              </>
             )}
           </div>
         </Modal>

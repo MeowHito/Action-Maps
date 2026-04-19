@@ -19,7 +19,6 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [tracksOpen, setTracksOpen] = useState(false);
-  const [tracksQuery, setTracksQuery] = useState('');
 
   const load = async () => {
     try {
@@ -370,25 +369,7 @@ export default function Home() {
 
       {/* ---------- Tracks modal (full-screen list with search) ---------- */}
       {tracksOpen && (() => {
-        const q = tracksQuery.trim().toLowerCase();
-        const filtered = q
-          ? events.filter((ev) => {
-              const name = ev.name.toLowerCase();
-              const slug = ev.slug.toLowerCase();
-              const dateStr = new Date(ev.createdAt)
-                .toLocaleDateString()
-                .toLowerCase();
-              const isoDate = new Date(ev.createdAt)
-                .toISOString()
-                .slice(0, 10);
-              return (
-                name.includes(q) ||
-                slug.includes(q) ||
-                dateStr.includes(q) ||
-                isoDate.includes(q)
-              );
-            })
-          : events;
+        const filtered = events;
 
         return (
           <div className="fixed inset-0 z-[2000] flex flex-col bg-[#faf8ff]">
@@ -419,7 +400,6 @@ export default function Home() {
               <button
                 onClick={() => {
                   setTracksOpen(false);
-                  setTracksQuery('');
                 }}
                 aria-label="Close"
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ecedfa] transition-colors hover:bg-[#e7e7f4]"
@@ -430,37 +410,8 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Search */}
-            <div className="flex-shrink-0 border-b border-[#c2c6d9]/20 bg-[#faf8ff]/90 px-4 py-3 backdrop-blur-xl">
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-base text-[#737687]">
-                  search
-                </span>
-                <input
-                  type="text"
-                  value={tracksQuery}
-                  onChange={(e) => setTracksQuery(e.target.value)}
-                  placeholder="ค้นหาด้วยชื่อ หรือวันที่ (e.g. 4/18/2026)"
-                  className="w-full rounded-xl border border-[#c2c6d9]/40 bg-white py-2.5 pl-10 pr-10 text-sm text-[#191b24] placeholder:text-[#737687] focus:border-[#004cca] focus:outline-none focus:ring-2 focus:ring-[#004cca]/20 transition-all"
-                  style={{ fontFamily: 'Inter, sans-serif' }}
-                  autoFocus
-                />
-                {tracksQuery && (
-                  <button
-                    onClick={() => setTracksQuery('')}
-                    aria-label="Clear search"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full hover:bg-[#ecedfa]"
-                  >
-                    <span className="material-symbols-outlined text-sm text-[#737687]">
-                      close
-                    </span>
-                  </button>
-                )}
-              </div>
-            </div>
-
             {/* List */}
-            <div className="flex-1 overflow-y-auto px-4 py-3 pb-24">
+            <div className="flex-1 overflow-y-auto px-4 py-3 pb-28 md:pb-6">
               {loading ? (
                 <p className="py-6 text-center text-xs text-[#737687]">
                   Loading…
@@ -468,12 +419,10 @@ export default function Home() {
               ) : filtered.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-[#c2c6d9] bg-[#f2f3ff]/60 px-4 py-10 text-center">
                   <span className="material-symbols-outlined text-3xl text-[#737687]">
-                    {q ? 'search_off' : 'map'}
+                    map
                   </span>
                   <p className="text-xs text-[#737687]">
-                    {q
-                      ? `ไม่พบแมพที่ตรงกับ "${tracksQuery}"`
-                      : 'ยังไม่มีแมพ สร้างแมพแรกด้านบน'}
+                    ยังไม่มีแมพ สร้างแมพแรกด้านบน
                   </p>
                 </div>
               ) : (
@@ -487,7 +436,6 @@ export default function Home() {
                         href={`/event/${ev.slug}`}
                         onClick={() => {
                           setTracksOpen(false);
-                          setTracksQuery('');
                         }}
                         className="flex min-w-0 flex-1 items-center gap-3"
                       >
@@ -536,6 +484,49 @@ export default function Home() {
                 </ul>
               )}
             </div>
+
+            <nav className="fixed bottom-0 left-0 right-0 z-[2100] border-t border-[#c2c6d9]/20 bg-[#faf8ff]/95 px-2 pb-5 pt-2 shadow-[0_-4px_20px_rgb(0,0,0,0.05)] backdrop-blur-2xl md:hidden">
+              <div className="flex items-center justify-around">
+                <button
+                  onClick={() => setTracksOpen(false)}
+                  className="flex flex-col items-center justify-center text-[#737687] px-4 py-1.5 hover:text-[#004cca] transition-all active:scale-90"
+                >
+                  <span className="material-symbols-outlined text-xl">explore</span>
+                  <span
+                    className="mt-0.5 text-[9px] font-bold uppercase tracking-widest"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                  >
+                    Explore
+                  </span>
+                </button>
+                <button className="flex flex-col items-center justify-center rounded-xl bg-[#0062ff]/10 px-4 py-1.5 text-[#004cca] active:scale-90 transition-transform">
+                  <span
+                    className="material-symbols-outlined text-xl"
+                    style={{ fontVariationSettings: "'FILL' 1" }}
+                  >
+                    route
+                  </span>
+                  <span
+                    className="mt-0.5 text-[9px] font-bold uppercase tracking-widest"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                  >
+                    Tracks
+                  </span>
+                </button>
+                <a
+                  className="flex flex-col items-center justify-center text-[#737687] px-4 py-1.5 hover:text-[#004cca] transition-all active:scale-90"
+                  href="#"
+                >
+                  <span className="material-symbols-outlined text-xl">person</span>
+                  <span
+                    className="mt-0.5 text-[9px] font-bold uppercase tracking-widest"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                  >
+                    Profile
+                  </span>
+                </a>
+              </div>
+            </nav>
           </div>
         );
       })()}
