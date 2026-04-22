@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, FormEvent } from 'react';
+import { useEffect, useRef, useState, FormEvent } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { EventDoc } from '@/lib/types';
@@ -66,27 +66,36 @@ export default function Home() {
     }
   };
 
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const onShare = async (ev: EventDoc) => {
     const url = `${window.location.origin}/event/${ev.slug}`;
-    const shareData = {
-      title: `GPX ACTION · ${ev.name}`,
-      text: `Check out this journey: ${ev.name}`,
-      url,
-    };
-    try {
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share(shareData);
-        return;
-      }
-    } catch {
-      /* user cancelled or share failed — fall through to copy */
-    }
+    let ok = false;
     try {
       await navigator.clipboard.writeText(url);
-      alert(`Link copied:\n${url}`);
+      ok = true;
     } catch {
-      prompt('Copy this link:', url);
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        ok = false;
+      }
     }
+    if (!ok) {
+      prompt('Copy this link:', url);
+      return;
+    }
+    setCopiedSlug(ev.slug);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopiedSlug(null), 1600);
   };
 
   return (
@@ -240,12 +249,16 @@ export default function Home() {
                   </Link>
                   <button
                     onClick={() => onShare(ev)}
-                    aria-label={`Share ${ev.slug}`}
-                    title="Share link"
-                    className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]"
+                    aria-label={`Copy link for ${ev.slug}`}
+                    title={copiedSlug === ev.slug ? 'Copied!' : 'Copy link'}
+                    className={`shrink-0 rounded-lg p-1.5 transition-colors ${
+                      copiedSlug === ev.slug
+                        ? 'bg-[#e4f6ea] text-[#17803d]'
+                        : 'text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]'
+                    }`}
                   >
                     <span className="material-symbols-outlined text-base">
-                      share
+                      {copiedSlug === ev.slug ? 'check' : 'content_copy'}
                     </span>
                   </button>
                   <button
@@ -459,12 +472,16 @@ export default function Home() {
                       </Link>
                       <button
                         onClick={() => onShare(ev)}
-                        aria-label={`Share ${ev.slug}`}
-                        title="Share link"
-                        className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]"
+                        aria-label={`Copy link for ${ev.slug}`}
+                        title={copiedSlug === ev.slug ? 'Copied!' : 'Copy link'}
+                        className={`shrink-0 rounded-lg p-1.5 transition-colors ${
+                          copiedSlug === ev.slug
+                            ? 'bg-[#e4f6ea] text-[#17803d]'
+                            : 'text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]'
+                        }`}
                       >
                         <span className="material-symbols-outlined text-base">
-                          share
+                          {copiedSlug === ev.slug ? 'check' : 'content_copy'}
                         </span>
                       </button>
                       <button
