@@ -575,6 +575,16 @@ export default function MapClient({ slug }: { slug: string }) {
       setTimeout(() => setUploadStats(null), 1200);
     }
 
+    // Success path → silent toast; only use alert() for real errors.
+    if (added > 0 && !failures.length) {
+      const extra =
+        fallbackUsed > 0
+          ? ` (${fallbackUsed} ใช้ ${fallbackSource})`
+          : '';
+      showToast(`อัปโหลดสำเร็จ ${added} รูป${extra}`);
+      return;
+    }
+
     const parts: string[] = [];
     if (added > 0) parts.push(`Uploaded ${added} photo(s)`);
     if (fallbackUsed > 0)
