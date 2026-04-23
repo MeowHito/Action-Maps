@@ -427,7 +427,12 @@ export default function MapClient({ slug }: { slug: string }) {
     lng: number;
     source: string;
   } | null> => {
-    if (userCoordsRef.current) {
+    const ok = (n: unknown): n is number => Number.isFinite(n);
+    if (
+      userCoordsRef.current &&
+      ok(userCoordsRef.current.lat) &&
+      ok(userCoordsRef.current.lng)
+    ) {
       return { ...userCoordsRef.current, source: 'current location' };
     }
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -450,14 +455,17 @@ export default function MapClient({ slug }: { slug: string }) {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         };
-        userCoordsRef.current = coords;
-        return { ...coords, source: 'current location' };
+        if (ok(coords.lat) && ok(coords.lng)) {
+          userCoordsRef.current = coords;
+          return { ...coords, source: 'current location' };
+        }
       } catch {
         /* fall through to map center */
       }
     }
     const c = mapRef.current?.getCenter();
-    if (c) return { lat: c.lat, lng: c.lng, source: 'map center' };
+    if (c && ok(c.lat) && ok(c.lng))
+      return { lat: c.lat, lng: c.lng, source: 'map center' };
     return null;
   };
 
@@ -507,6 +515,15 @@ export default function MapClient({ slug }: { slug: string }) {
           fallbackUsed++;
           fallbackSource = fb.source;
           console.log(tag, 'using fallback coords', fb);
+        }
+
+        if (!Number.isFinite(gps.lat) || !Number.isFinite(gps.lng)) {
+          failures.push({
+            name: file.name,
+            reason: `invalid coords (lat=${gps.lat}, lng=${gps.lng})`,
+          });
+          skipped++;
+          return;
         }
 
         const outFile = new File([prepared.blob], prepared.filename, {

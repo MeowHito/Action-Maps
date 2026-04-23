@@ -34,14 +34,23 @@ export async function extractGps(file: Blob): Promise<GpsData | null> {
       | { latitude?: number; longitude?: number }
       | null
       | undefined;
-    if (gps && typeof gps.latitude === 'number' && typeof gps.longitude === 'number') {
+    if (
+      gps &&
+      Number.isFinite(gps.latitude) &&
+      Number.isFinite(gps.longitude) &&
+      // Reject the (0, 0) "Null Island" sentinel that some cameras/apps write
+      // when they failed to acquire a fix (common with Onroyd/Garmin exports).
+      !(gps.latitude === 0 && gps.longitude === 0) &&
+      Math.abs(gps.latitude as number) <= 90 &&
+      Math.abs(gps.longitude as number) <= 180
+    ) {
       lat = gps.latitude;
       lng = gps.longitude;
     }
   } catch {
     /* fall through — no GPS */
   }
-  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
   let takenAt: string | undefined;
   try {
@@ -55,7 +64,7 @@ export async function extractGps(file: Blob): Promise<GpsData | null> {
     /* timestamp optional */
   }
 
-  return { lat, lng, takenAt };
+  return { lat: lat as number, lng: lng as number, takenAt };
 }
 
 function isHeic(file: { name?: string; type?: string }): boolean {
