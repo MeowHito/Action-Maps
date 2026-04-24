@@ -283,6 +283,13 @@ export default function MapClient({ slug }: { slug: string }) {
   const [activeStatsRouteId, setActiveStatsRouteId] = useState<string | null>(
     null,
   );
+  const [statsCollapsed, setStatsCollapsed] = useState(false);
+  const [trackPickerOpen, setTrackPickerOpen] = useState(false);
+  // Ensure the overlay opens expanded whenever the user picks a new track.
+  useEffect(() => {
+    setStatsCollapsed(false);
+    setTrackPickerOpen(false);
+  }, [activeStatsRouteId]);
   const [loading, setLoading] = useState<string | null>('Loading event…');
   const [error, setError] = useState<string | null>(null);
   const [albumOpen, setAlbumOpen] = useState(false);
@@ -1038,50 +1045,156 @@ export default function MapClient({ slug }: { slug: string }) {
         const r = routes.find((x) => x._id === activeStatsRouteId);
         const st = r ? routeStats[r._id] : null;
         if (!r || !st) return null;
+
+        // Collapsed → just a floating chevron-up button at bottom-right to re-expand.
+        if (statsCollapsed) {
+          return (
+            <button
+              onClick={() => setStatsCollapsed(false)}
+              aria-label="Expand track stats"
+              className="pointer-events-auto fixed right-3 z-[999] flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#faf8ff]/95 shadow-xl backdrop-blur-xl transition-transform active:scale-95"
+              style={{
+                bottom: 'calc(132px + env(safe-area-inset-bottom))',
+              }}
+            >
+              <span
+                className="material-symbols-outlined text-[#004cca]"
+                style={{ fontSize: 26, fontVariationSettings: "'FILL' 1" }}
+              >
+                keyboard_double_arrow_up
+              </span>
+            </button>
+          );
+        }
+
         return (
           <div
-            className="pointer-events-none fixed bottom-[132px] left-0 right-0 z-[999] px-3"
+            className="pointer-events-none fixed left-0 right-0 z-[999] px-3"
             style={{
               bottom: 'calc(132px + env(safe-area-inset-bottom))',
             }}
           >
-            <div className="pointer-events-auto mx-auto max-w-sm rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div
-                    className="flex items-baseline gap-1 text-[#191b24]"
-                    style={headlineFont}
-                  >
-                    <span className="text-2xl font-bold leading-none">
-                      {st.distanceKm.toFixed(1)}
-                    </span>
-                    <span className="text-sm font-bold text-[#737687]">km</span>
-                  </div>
-                  <div
-                    className="mt-0.5 flex items-center gap-1.5 text-[10px]"
-                    style={{ fontFamily: 'Inter, sans-serif' }}
-                  >
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: r.color }}
-                    />
-                    <span className="truncate font-semibold text-[#424656]">
-                      {r.name}
-                    </span>
-                  </div>
-                </div>
+            <div className="pointer-events-auto relative mx-auto max-w-sm rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl">
+              {/* Header row: track picker (left) + collapse/close (right) */}
+              <div className="mb-2 flex items-center gap-2">
                 <button
-                  onClick={() => setActiveStatsRouteId(null)}
-                  aria-label="Close stats"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656] transition-colors hover:bg-[#e1e2ee]"
+                  onClick={() => setTrackPickerOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={trackPickerOpen}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-[#ecedfa] px-2.5 py-1.5 text-left transition-colors hover:bg-[#e1e2ee]"
                 >
                   <span
-                    className="material-symbols-outlined"
-                    style={{ fontSize: 16 }}
+                    className="material-symbols-outlined shrink-0 text-[#004cca]"
+                    style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}
                   >
+                    monitoring
+                  </span>
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ background: r.color }}
+                  />
+                  <span
+                    className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[#191b24]"
+                    style={{ fontFamily: 'Inter, sans-serif' }}
+                  >
+                    {r.name}
+                  </span>
+                  <span
+                    className="material-symbols-outlined shrink-0 text-[#424656]"
+                    style={{
+                      fontSize: 16,
+                      transform: trackPickerOpen ? 'rotate(180deg)' : 'none',
+                      transition: 'transform 150ms',
+                    }}
+                  >
+                    expand_more
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    setStatsCollapsed(true);
+                    setTrackPickerOpen(false);
+                  }}
+                  aria-label="Collapse stats"
+                  title="ย่อ"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656] transition-colors hover:bg-[#e1e2ee]"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                    keyboard_arrow_down
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveStatsRouteId(null);
+                    setTrackPickerOpen(false);
+                  }}
+                  aria-label="Close stats"
+                  title="ปิด"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656] transition-colors hover:bg-[#e1e2ee]"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
                     close
                   </span>
                 </button>
+              </div>
+
+              {/* Track picker dropdown */}
+              {trackPickerOpen && (
+                <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-[#c2c6d9]/40 bg-white shadow-sm">
+                  {routes.map((opt) => {
+                    const os = routeStats[opt._id];
+                    const isSel = opt._id === activeStatsRouteId;
+                    return (
+                      <button
+                        key={opt._id}
+                        onClick={() => {
+                          setActiveStatsRouteId(opt._id);
+                          setTrackPickerOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors ${
+                          isSel ? 'bg-[#eaf0ff]' : 'hover:bg-[#f2f3ff]'
+                        }`}
+                      >
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ background: opt.color }}
+                        />
+                        <span
+                          className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[#191b24]"
+                          style={{ fontFamily: 'Inter, sans-serif' }}
+                        >
+                          {opt.name}
+                        </span>
+                        {os && (
+                          <span
+                            className="shrink-0 text-[10px] font-bold text-[#004cca]"
+                            style={headlineFont}
+                          >
+                            {os.distanceKm.toFixed(2)} km
+                          </span>
+                        )}
+                        {isSel && (
+                          <span
+                            className="material-symbols-outlined shrink-0 text-[#004cca]"
+                            style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}
+                          >
+                            check
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div
+                className="flex items-baseline gap-1 text-[#191b24]"
+                style={headlineFont}
+              >
+                <span className="text-2xl font-bold leading-none">
+                  {st.distanceKm.toFixed(1)}
+                </span>
+                <span className="text-sm font-bold text-[#737687]">km</span>
               </div>
               <div
                 className="mt-1 text-[10px] font-semibold text-[#424656]"
