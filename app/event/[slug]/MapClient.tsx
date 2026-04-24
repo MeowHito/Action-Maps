@@ -14,6 +14,69 @@ type MarkerClusterGroup = L.MarkerClusterGroup;
 type AnyMarker = L.Marker & { _photoId?: string; options: L.MarkerOptions & { imgUrl?: string } };
 
 type RoutePoint = { lat: number; lng: number; t: number };
+type RouteDistPoint = { lat: number; lng: number; d: number };
+
+function haversineKmPair(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number,
+): number {
+  const R = 6371;
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+/** Parse GPX into trkpts annotated with cumulative distance in km. */
+function parseGpxDistPoints(text: string): RouteDistPoint[] {
+  try {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const pts = Array.from(doc.getElementsByTagName('trkpt'));
+    const out: RouteDistPoint[] = [];
+    let dist = 0;
+    let prev: { lat: number; lng: number } | null = null;
+    for (const p of pts) {
+      const lat = parseFloat(p.getAttribute('lat') || 'NaN');
+      const lng = parseFloat(p.getAttribute('lon') || 'NaN');
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      if (prev) dist += haversineKmPair(prev.lat, prev.lng, lat, lng);
+      out.push({ lat, lng, d: dist });
+      prev = { lat, lng };
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Compute interpolated lat/lng at every integer km along a route. */
+function kilometerMarkers(
+  pts: RouteDistPoint[],
+): { km: number; lat: number; lng: number }[] {
+  if (pts.length < 2) return [];
+  const total = pts[pts.length - 1].d;
+  const out: { km: number; lat: number; lng: number }[] = [];
+  let idx = 1;
+  for (let km = 1; km <= Math.floor(total); km++) {
+    while (idx < pts.length && pts[idx].d < km) idx++;
+    if (idx >= pts.length) break;
+    const a = pts[idx - 1];
+    const b = pts[idx];
+    const span = b.d - a.d;
+    const f = span > 0 ? (km - a.d) / span : 0;
+    out.push({
+      km,
+      lat: a.lat + (b.lat - a.lat) * f,
+      lng: a.lng + (b.lng - a.lng) * f,
+    });
+  }
+  return out;
+}
 
 /** Parse `<trkpt lat lon><time>` into a time-sorted timeline for photo matching. */
 function parseGpxTimeline(text: string): RoutePoint[] {
@@ -209,6 +272,8 @@ export default function MapClient({ slug }: { slug: string }) {
   const photoMarkersRef = useRef<Map<string, AnyMarker>>(new Map());
   const routeLayersRef = useRef<Map<string, L.Layer>>(new Map());
   const routeTimelinesRef = useRef<Map<string, RoutePoint[]>>(new Map());
+  const routeDistPointsRef = useRef<Map<string, RouteDistPoint[]>>(new Map());
+  const kmMarkersLayerRef = useRef<L.LayerGroup | null>(null);
 
   const [event, setEvent] = useState<EventDoc | null>(null);
   const [photos, setPhotos] = useState<PhotoDoc[]>([]);
@@ -356,6 +421,8 @@ export default function MapClient({ slug }: { slug: string }) {
       if (stats) setRouteStats((cur) => ({ ...cur, [r._id]: stats }));
       const timeline = parseGpxTimeline(text);
       if (timeline.length) routeTimelinesRef.current.set(r._id, timeline);
+      const distPts = parseGpxDistPoints(text);
+      if (distPts.length) routeDistPointsRef.current.set(r._id, distPts);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const GPX = (L as any).GPX as new (
         data: string,
@@ -381,12 +448,52 @@ export default function MapClient({ slug }: { slug: string }) {
     }
   }, []);
 
+  // Draw numbered km markers along the currently active track. Cleared when
+  // the user toggles SHOW KM off or switches to a different track.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (kmMarkersLayerRef.current) {
+      map.removeLayer(kmMarkersLayerRef.current);
+      kmMarkersLayerRef.current = null;
+    }
+    if (!activeStatsRouteId) return;
+    const pts = routeDistPointsRef.current.get(activeStatsRouteId);
+    if (!pts || pts.length < 2) return;
+    const route = routes.find((x) => x._id === activeStatsRouteId);
+    const color = route?.color ?? '#004cca';
+    const marks = kilometerMarkers(pts);
+    if (!marks.length) return;
+    const group = L.layerGroup();
+    for (const m of marks) {
+      const icon = L.divIcon({
+        className: 'km-marker',
+        html:
+          `<div style="display:flex;align-items:center;justify-content:center;` +
+          `width:22px;height:22px;border-radius:11px;` +
+          `background:${color};color:#fff;` +
+          `font:700 10px/1 'Space Grotesk',Inter,sans-serif;` +
+          `border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);">${m.km}</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      });
+      L.marker([m.lat, m.lng], {
+        icon,
+        interactive: false,
+        keyboard: false,
+      }).addTo(group);
+    }
+    group.addTo(map);
+    kmMarkersLayerRef.current = group;
+  }, [activeStatsRouteId, routes]);
+
   const removeRouteLayer = useCallback((id: string) => {
     const map = mapRef.current;
     const layer = routeLayersRef.current.get(id);
     if (layer && map) map.removeLayer(layer);
     routeLayersRef.current.delete(id);
     routeTimelinesRef.current.delete(id);
+    routeDistPointsRef.current.delete(id);
     setRouteStats((cur) => {
       if (!(id in cur)) return cur;
       const next = { ...cur };
