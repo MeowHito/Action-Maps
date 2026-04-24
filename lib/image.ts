@@ -9,6 +9,26 @@ export interface GpsData {
   takenAt?: string;
 }
 
+/** Read DateTimeOriginal / CreateDate from EXIF, returning an ISO string or null. */
+export async function extractTakenAt(file: Blob): Promise<string | null> {
+  const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+    Promise.race([
+      p,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+    ]);
+  try {
+    const meta = (await withTimeout(
+      exifr.parse(file, ['DateTimeOriginal', 'CreateDate']),
+      8000,
+    )) as { DateTimeOriginal?: Date; CreateDate?: Date } | null | undefined;
+    const ts = meta?.DateTimeOriginal ?? meta?.CreateDate;
+    if (ts instanceof Date && !isNaN(ts.getTime())) return ts.toISOString();
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 /** Extract GPS + timestamp from an image's EXIF. Returns null if no coords. */
 export async function extractGps(file: Blob): Promise<GpsData | null> {
   // iOS Safari can take several seconds parsing a 4 MB HEIC's EXIF box; cap it
