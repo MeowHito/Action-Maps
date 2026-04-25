@@ -100,7 +100,7 @@ export default function Home() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden bg-[#faf8ff] text-[#191b24] selection:bg-[#b4c5ff]"
+      className="flex min-h-screen flex-col overflow-x-hidden bg-[#faf8ff] text-[#191b24] selection:bg-[#b4c5ff]"
       style={{ fontFamily: 'var(--font-sans), Inter, sans-serif' }}
     >
       {/* ---------- Header ---------- */}
@@ -119,7 +119,7 @@ export default function Home() {
       </header>
 
       {/* ---------- Main ---------- */}
-      <main className="pt-10 pb-28 md:pb-12 px-4 md:ml-16">
+      <main className="flex-1 pt-10 pb-28 md:pb-12 px-4 md:ml-16">
         {/* Hero + create */}
         <section className="mt-2 mb-6 relative">
           <div className="max-w-md mx-auto">
@@ -195,7 +195,7 @@ export default function Home() {
         </section>
 
         {/* Event ledger */}
-        <section className="mt-8 max-w-md mx-auto">
+        <section className="mt-8 max-w-md mx-auto md:mt-14">
           <div className="flex items-baseline justify-between mb-3">
             <h3
               className="text-sm font-bold uppercase tracking-[0.18em] text-[#191b24]"
@@ -279,7 +279,7 @@ export default function Home() {
       </main>
 
       {/* ---------- Desktop footer ---------- */}
-      <footer className="w-full py-6 hidden md:flex flex-col items-center gap-2 px-6 border-t border-[#c2c6d9]/20 bg-white md:ml-16">
+      <footer className="w-full py-8 hidden md:flex flex-col items-center gap-2 px-6 border-t border-[#c2c6d9]/20 bg-white md:ml-16">
         <div
           className="font-bold text-sm text-[#004cca] tracking-wide"
           style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}

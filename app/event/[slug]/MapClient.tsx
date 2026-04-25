@@ -285,6 +285,16 @@ export default function MapClient({ slug }: { slug: string }) {
   );
   const [statsCollapsed, setStatsCollapsed] = useState(false);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
+  const [statsPos, setStatsPos] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   // Ensure the overlay opens expanded whenever the user picks a new track.
   useEffect(() => {
     setStatsCollapsed(false);
@@ -1045,17 +1055,34 @@ export default function MapClient({ slug }: { slug: string }) {
         const r = routes.find((x) => x._id === activeStatsRouteId);
         const st = r ? routeStats[r._id] : null;
         if (!r || !st) return null;
+        const isDesktop = () =>
+          typeof window !== 'undefined' && window.innerWidth >= 768;
+        const statsOverlayStyle = isDesktop()
+          ? {
+              left: `${statsPos?.x ?? 16}px`,
+              top: `${statsPos?.y ?? 80}px`,
+              bottom: 'auto',
+              right: 'auto',
+            }
+          : { bottom: 'calc(132px + env(safe-area-inset-bottom))' };
+        const collapsedButtonStyle = isDesktop()
+          ? {
+              left: `${statsPos?.x ?? 16}px`,
+              top: `${statsPos?.y ?? 80}px`,
+              bottom: 'auto',
+              right: 'auto',
+            }
+          : { bottom: 'calc(132px + env(safe-area-inset-bottom))' };
 
-        // Collapsed → just a floating chevron-up button at bottom-right to re-expand.
+        // Collapsed → just a floating chevron-up button to re-expand.
+        // Mobile: bottom-right above the panel. Desktop: top-left under the header.
         if (statsCollapsed) {
           return (
             <button
               onClick={() => setStatsCollapsed(false)}
               aria-label="Expand track stats"
-              className="pointer-events-auto fixed right-3 z-[999] flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#faf8ff]/95 shadow-xl backdrop-blur-xl transition-transform active:scale-95"
-              style={{
-                bottom: 'calc(132px + env(safe-area-inset-bottom))',
-              }}
+              className="pointer-events-auto fixed right-3 z-[999] flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#faf8ff]/95 shadow-xl backdrop-blur-xl transition-transform active:scale-95 md:bottom-auto md:right-auto md:left-4 md:top-20"
+              style={collapsedButtonStyle}
             >
               <span
                 className="material-symbols-outlined text-[#004cca]"
@@ -1069,12 +1096,42 @@ export default function MapClient({ slug }: { slug: string }) {
 
         return (
           <div
-            className="pointer-events-none fixed left-0 right-0 z-[999] px-3"
-            style={{
-              bottom: 'calc(132px + env(safe-area-inset-bottom))',
-            }}
+            className="pointer-events-none fixed left-0 right-0 z-[999] px-3 md:right-auto md:left-4 md:top-20 md:bottom-auto md:px-0"
+            style={statsOverlayStyle}
           >
-            <div className="pointer-events-auto relative mx-auto max-w-sm rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl">
+            <div
+              onPointerDown={(e) => {
+                if (!isDesktop()) return;
+                if ((e.target as HTMLElement).closest('button')) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                dragRef.current = {
+                  pointerId: e.pointerId,
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  originX: rect.left,
+                  originY: rect.top,
+                };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const drag = dragRef.current;
+                if (!drag || drag.pointerId !== e.pointerId || !isDesktop()) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const maxX = window.innerWidth - rect.width - 8;
+                const maxY = window.innerHeight - rect.height - 8;
+                setStatsPos({
+                  x: Math.min(Math.max(8, drag.originX + e.clientX - drag.startX), maxX),
+                  y: Math.min(Math.max(56, drag.originY + e.clientY - drag.startY), maxY),
+                });
+              }}
+              onPointerUp={(e) => {
+                if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+              }}
+              onPointerCancel={(e) => {
+                if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+              }}
+              className="pointer-events-auto relative mx-auto max-w-sm touch-none rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl md:mx-0 md:w-[360px] md:cursor-move"
+            >
               {/* Header row: track picker (left) + collapse/close (right) */}
               <div className="mb-2 flex items-center gap-2">
                 <button
@@ -1221,10 +1278,10 @@ export default function MapClient({ slug }: { slug: string }) {
 
       {/* ============== BOTTOM PANEL ============== */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-[1000] px-3 pb-3"
+        className="fixed bottom-0 left-0 right-0 z-[1000] px-3 pb-3 md:right-auto md:w-[360px] md:px-4"
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
-        <div className="mx-auto max-w-sm">
+        <div className="mx-auto max-w-sm md:mx-0">
           {/* Upload progress card */}
           {uploadStats && (
             <div className="mb-2 rounded-xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl">
