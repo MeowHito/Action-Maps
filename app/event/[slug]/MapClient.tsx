@@ -78,6 +78,27 @@ function kilometerMarkers(
   return out;
 }
 
+function pointAtDistance(
+  pts: RouteDistPoint[],
+  distanceKm: number,
+): { lat: number; lng: number } | null {
+  if (!pts.length) return null;
+  if (distanceKm <= pts[0].d) return { lat: pts[0].lat, lng: pts[0].lng };
+  const last = pts[pts.length - 1];
+  if (distanceKm >= last.d) return { lat: last.lat, lng: last.lng };
+  let idx = 1;
+  while (idx < pts.length && pts[idx].d < distanceKm) idx++;
+  if (idx >= pts.length) return { lat: last.lat, lng: last.lng };
+  const a = pts[idx - 1];
+  const b = pts[idx];
+  const span = b.d - a.d;
+  const f = span > 0 ? (distanceKm - a.d) / span : 0;
+  return {
+    lat: a.lat + (b.lat - a.lat) * f,
+    lng: a.lng + (b.lng - a.lng) * f,
+  };
+}
+
 /** Parse `<trkpt lat lon><time>` into a time-sorted timeline for photo matching. */
 function parseGpxTimeline(text: string): RoutePoint[] {
   try {
@@ -218,12 +239,17 @@ function ElevationChart({
   color,
   minEle,
   maxEle,
+  onDistanceHover,
 }: {
   profile: { d: number; e: number }[];
   color: string;
   minEle: number;
   maxEle: number;
+  onDistanceHover?: (distanceKm: number | null) => void;
 }) {
+  const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const W = 300;
   const H = 60;
   const pad = 4;
@@ -236,13 +262,52 @@ function ElevationChart({
   });
   const line = xy.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${H - pad} L${xy[0][0].toFixed(1)},${H - pad} Z`;
+  const emitDistance = (clientX: number, target: EventTarget | null) => {
+    if (!onDistanceHover || !(target instanceof SVGSVGElement)) return;
+    const rect = target.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const distanceKm = ratio * maxD;
+    const nearestIdx = profile.reduce((bestIdx, p, idx) =>
+      Math.abs(p.d - distanceKm) < Math.abs(profile[bestIdx].d - distanceKm)
+        ? idx
+        : bestIdx,
+    0);
+    setHoverPoint({ x: ratio * 100, y: (xy[nearestIdx][1] / H) * 100 });
+    onDistanceHover(distanceKm);
+  };
   return (
-    <div className="mt-2 rounded-lg bg-white p-1.5">
+    <div className="relative mt-2 rounded-lg bg-white p-1.5">
+      {hoverPoint && (
+        <div
+          className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full text-[#004cca] drop-shadow-md"
+          style={{ left: `${hoverPoint.x}%`, top: `${hoverPoint.y}%` }}
+        >
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: 24, fontVariationSettings: "'FILL' 1" }}
+          >
+            location_on
+          </span>
+        </div>
+      )}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
-        className="h-14 w-full"
+        className="h-14 w-full md:h-32"
         aria-label="Elevation profile"
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          emitDistance(e.clientX, e.currentTarget);
+        }}
+        onPointerMove={(e) => emitDistance(e.clientX, e.currentTarget)}
+        onPointerLeave={() => {
+          setHoverPoint(null);
+          onDistanceHover?.(null);
+        }}
+        onPointerUp={(e) => {
+          emitDistance(e.clientX, e.currentTarget);
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }}
       >
         <path d={area} fill={color} opacity={0.18} />
         <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
@@ -274,6 +339,15 @@ export default function MapClient({ slug }: { slug: string }) {
   const routeTimelinesRef = useRef<Map<string, RoutePoint[]>>(new Map());
   const routeDistPointsRef = useRef<Map<string, RouteDistPoint[]>>(new Map());
   const kmMarkersLayerRef = useRef<L.LayerGroup | null>(null);
+  const chartHoverMarkerRef = useRef<L.Marker | null>(null);
+  const statsPanelDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    width: number;
+  } | null>(null);
 
   const [event, setEvent] = useState<EventDoc | null>(null);
   const [photos, setPhotos] = useState<PhotoDoc[]>([]);
@@ -285,20 +359,16 @@ export default function MapClient({ slug }: { slug: string }) {
   );
   const [statsCollapsed, setStatsCollapsed] = useState(false);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
-  const [statsPos, setStatsPos] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    originX: number;
-    originY: number;
+  const [statsPanelPos, setStatsPanelPos] = useState<{
+    x: number;
+    y: number;
+    width: number;
   } | null>(null);
   // Ensure the overlay opens expanded whenever the user picks a new track.
   useEffect(() => {
     setStatsCollapsed(false);
     setTrackPickerOpen(false);
+    setStatsPanelPos(null);
   }, [activeStatsRouteId]);
   const [loading, setLoading] = useState<string | null>('Loading event…');
   const [error, setError] = useState<string | null>(null);
@@ -384,6 +454,47 @@ export default function MapClient({ slug }: { slug: string }) {
       `${markerSize}px`,
     );
   }, [markerSize]);
+
+  const updateChartHoverMarker = useCallback(
+    (routeId: string, distanceKm: number | null) => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (distanceKm === null) {
+        if (chartHoverMarkerRef.current) {
+          map.removeLayer(chartHoverMarkerRef.current);
+          chartHoverMarkerRef.current = null;
+        }
+        return;
+      }
+      const pts = routeDistPointsRef.current.get(routeId);
+      if (!pts || pts.length < 2) return;
+      const p = pointAtDistance(pts, distanceKm);
+      if (!p) return;
+      if (!chartHoverMarkerRef.current) {
+        const icon = L.divIcon({
+          className: '',
+          html: '<div style="display:flex;height:32px;width:32px;align-items:center;justify-content:center;border-radius:9999px;background:#004cca;color:white;box-shadow:0 10px 18px rgba(0,0,0,.24);border:2px solid white;"><span class="material-symbols-outlined" style="font-size:20px;font-variation-settings:\'FILL\' 1">location_on</span></div>',
+          iconSize: [32, 32],
+          iconAnchor: [16, 32],
+        });
+        chartHoverMarkerRef.current = L.marker([p.lat, p.lng], {
+          icon,
+          interactive: false,
+          zIndexOffset: 2000,
+        }).addTo(map);
+      } else {
+        chartHoverMarkerRef.current.setLatLng([p.lat, p.lng]);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !chartHoverMarkerRef.current) return;
+    map.removeLayer(chartHoverMarkerRef.current);
+    chartHoverMarkerRef.current = null;
+  }, [activeStatsRouteId]);
 
   // ---- Photo helpers ----
   const addPhoto = useCallback((p: PhotoDoc) => {
@@ -965,6 +1076,12 @@ export default function MapClient({ slug }: { slug: string }) {
   const pendingInQueue = uploadStats
     ? uploadStats.total - uploadStats.done
     : 0;
+  const activeStatsRoute = activeStatsRouteId
+    ? routes.find((x) => x._id === activeStatsRouteId) ?? null
+    : null;
+  const activeRouteStats = activeStatsRoute
+    ? routeStats[activeStatsRoute._id] ?? null
+    : null;
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#faf8ff] text-[#191b24]">
@@ -991,13 +1108,124 @@ export default function MapClient({ slug }: { slug: string }) {
                 explore
               </span>
             </div>
-            <h1
-              className="truncate text-sm font-black uppercase tracking-tighter text-[#004cca]"
-              style={headlineFont}
-              title={event?.name ?? slug}
-            >
-              {event?.name ?? slug}
-            </h1>
+            {activeStatsRoute && activeRouteStats && !statsCollapsed ? (
+              <div className="relative flex min-w-0 flex-1 items-center gap-1.5 md:hidden">
+                <button
+                  onClick={() => setTrackPickerOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={trackPickerOpen}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-[#ecedfa] px-2.5 py-1.5 text-left"
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ background: activeStatsRoute.color }}
+                  />
+                  <span
+                    className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[#191b24]"
+                    style={{ fontFamily: 'Inter, sans-serif' }}
+                  >
+                    {activeStatsRoute.name}
+                  </span>
+                  <span className="shrink-0 text-[10px] font-bold text-[#004cca]" style={headlineFont}>
+                    {activeRouteStats.distanceKm.toFixed(1)} km
+                  </span>
+                  <span
+                    className="material-symbols-outlined shrink-0 text-[#424656]"
+                    style={{ fontSize: 16 }}
+                  >
+                    expand_more
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    setStatsCollapsed(true);
+                    setTrackPickerOpen(false);
+                  }}
+                  aria-label="Collapse stats"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656]"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                    keyboard_arrow_down
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveStatsRouteId(null);
+                    setTrackPickerOpen(false);
+                  }}
+                  aria-label="Close stats"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656]"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                    close
+                  </span>
+                </button>
+                {trackPickerOpen && (
+                  <div className="absolute left-0 right-0 top-10 z-[1200] max-h-56 overflow-y-auto rounded-xl border border-[#c2c6d9]/40 bg-white shadow-xl">
+                    {routes.map((opt) => {
+                      const os = routeStats[opt._id];
+                      const isSel = opt._id === activeStatsRouteId;
+                      return (
+                        <button
+                          key={opt._id}
+                          onClick={() => {
+                            setActiveStatsRouteId(opt._id);
+                            setTrackPickerOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors ${
+                            isSel ? 'bg-[#eaf0ff]' : 'hover:bg-[#f2f3ff]'
+                          }`}
+                        >
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ background: opt.color }}
+                          />
+                          <span
+                            className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[#191b24]"
+                            style={{ fontFamily: 'Inter, sans-serif' }}
+                          >
+                            {opt.name}
+                          </span>
+                          {os && (
+                            <span
+                              className="shrink-0 text-[10px] font-bold text-[#004cca]"
+                              style={headlineFont}
+                            >
+                              {os.distanceKm.toFixed(2)} km
+                            </span>
+                          )}
+                          {isSel && (
+                            <span
+                              className="material-symbols-outlined shrink-0 text-[#004cca]"
+                              style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}
+                            >
+                              check
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <h1
+                className="truncate text-sm font-black uppercase tracking-tighter text-[#004cca]"
+                style={headlineFont}
+                title={event?.name ?? slug}
+              >
+                {event?.name ?? slug}
+              </h1>
+            )}
+            {activeStatsRoute && activeRouteStats && !statsCollapsed && (
+              <h1
+                className="hidden truncate text-sm font-black uppercase tracking-tighter text-[#004cca] md:block"
+                style={headlineFont}
+                title={event?.name ?? slug}
+              >
+                {event?.name ?? slug}
+              </h1>
+            )}
           </div>
         </div>
 
@@ -1055,24 +1283,23 @@ export default function MapClient({ slug }: { slug: string }) {
         const r = routes.find((x) => x._id === activeStatsRouteId);
         const st = r ? routeStats[r._id] : null;
         if (!r || !st) return null;
-        const isDesktop = () =>
+        const isDesktop =
           typeof window !== 'undefined' && window.innerWidth >= 768;
-        const statsOverlayStyle = isDesktop()
-          ? {
-              left: `${statsPos?.x ?? 16}px`,
-              top: `${statsPos?.y ?? 80}px`,
-              bottom: 'auto',
-              right: 'auto',
-            }
+        const mobileBottomStyle = isDesktop
+          ? { bottom: 0 }
           : { bottom: 'calc(132px + env(safe-area-inset-bottom))' };
-        const collapsedButtonStyle = isDesktop()
-          ? {
-              left: `${statsPos?.x ?? 16}px`,
-              top: `${statsPos?.y ?? 80}px`,
-              bottom: 'auto',
-              right: 'auto',
-            }
+        const collapsedButtonStyle = isDesktop
+          ? { bottom: 12 }
           : { bottom: 'calc(132px + env(safe-area-inset-bottom))' };
+        const desktopPanelStyle = statsPanelPos
+          ? {
+              left: `${statsPanelPos.x}px`,
+              top: `${statsPanelPos.y}px`,
+              right: 'auto',
+              bottom: 'auto',
+              width: `${statsPanelPos.width}px`,
+            }
+          : undefined;
 
         // Collapsed → just a floating chevron-up button to re-expand.
         // Mobile: bottom-right above the panel. Desktop: top-left under the header.
@@ -1081,7 +1308,7 @@ export default function MapClient({ slug }: { slug: string }) {
             <button
               onClick={() => setStatsCollapsed(false)}
               aria-label="Expand track stats"
-              className="pointer-events-auto fixed right-3 z-[999] flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#faf8ff]/95 shadow-xl backdrop-blur-xl transition-transform active:scale-95 md:bottom-auto md:right-auto md:left-4 md:top-20"
+              className="pointer-events-auto fixed right-3 z-[999] flex h-11 w-11 items-center justify-center rounded-full border-2 border-white bg-[#faf8ff]/95 shadow-xl backdrop-blur-xl transition-transform active:scale-95 md:left-3 md:right-auto"
               style={collapsedButtonStyle}
             >
               <span
@@ -1096,44 +1323,46 @@ export default function MapClient({ slug }: { slug: string }) {
 
         return (
           <div
-            className="pointer-events-none fixed left-0 right-0 z-[999] px-3 md:right-auto md:left-4 md:top-20 md:bottom-auto md:px-0"
-            style={statsOverlayStyle}
+            className="pointer-events-none fixed left-0 right-0 z-[999] px-3 md:left-0 md:right-0 md:px-0"
+            style={{ ...mobileBottomStyle, ...(isDesktop ? desktopPanelStyle : undefined) }}
           >
             <div
               onPointerDown={(e) => {
-                if (!isDesktop()) return;
-                if ((e.target as HTMLElement).closest('button')) return;
+                if (window.innerWidth < 768) return;
+                if ((e.target as HTMLElement).closest('button, svg, input, label')) return;
                 const rect = e.currentTarget.getBoundingClientRect();
-                dragRef.current = {
+                statsPanelDragRef.current = {
                   pointerId: e.pointerId,
                   startX: e.clientX,
                   startY: e.clientY,
                   originX: rect.left,
                   originY: rect.top,
+                  width: rect.width,
                 };
                 e.currentTarget.setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
-                const drag = dragRef.current;
-                if (!drag || drag.pointerId !== e.pointerId || !isDesktop()) return;
+                const drag = statsPanelDragRef.current;
+                if (!drag || drag.pointerId !== e.pointerId || window.innerWidth < 768) return;
                 const rect = e.currentTarget.getBoundingClientRect();
-                const maxX = window.innerWidth - rect.width - 8;
-                const maxY = window.innerHeight - rect.height - 8;
-                setStatsPos({
-                  x: Math.min(Math.max(8, drag.originX + e.clientX - drag.startX), maxX),
-                  y: Math.min(Math.max(56, drag.originY + e.clientY - drag.startY), maxY),
+                const maxX = window.innerWidth - rect.width;
+                const maxY = window.innerHeight - rect.height;
+                setStatsPanelPos({
+                  x: Math.min(Math.max(0, drag.originX + e.clientX - drag.startX), maxX),
+                  y: Math.min(Math.max(0, drag.originY + e.clientY - drag.startY), maxY),
+                  width: drag.width,
                 });
               }}
               onPointerUp={(e) => {
-                if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+                if (statsPanelDragRef.current?.pointerId === e.pointerId) statsPanelDragRef.current = null;
               }}
               onPointerCancel={(e) => {
-                if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+                if (statsPanelDragRef.current?.pointerId === e.pointerId) statsPanelDragRef.current = null;
               }}
-              className="pointer-events-auto relative mx-auto max-w-sm touch-none rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl md:mx-0 md:w-[360px] md:cursor-move"
+              className="pointer-events-auto relative mx-auto max-w-sm rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl md:mx-0 md:max-w-none md:cursor-move md:rounded-none md:border-x-0 md:border-b-0 md:p-4"
             >
               {/* Header row: track picker (left) + collapse/close (right) */}
-              <div className="mb-2 flex items-center gap-2">
+              <div className="mb-2 hidden items-center gap-2 md:flex">
                 <button
                   onClick={() => setTrackPickerOpen((v) => !v)}
                   aria-haspopup="listbox"
@@ -1197,7 +1426,7 @@ export default function MapClient({ slug }: { slug: string }) {
 
               {/* Track picker dropdown */}
               {trackPickerOpen && (
-                <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-[#c2c6d9]/40 bg-white shadow-sm">
+                <div className="mb-2 hidden max-h-56 overflow-y-auto rounded-xl border border-[#c2c6d9]/40 bg-white shadow-sm md:block">
                   {routes.map((opt) => {
                     const os = routeStats[opt._id];
                     const isSel = opt._id === activeStatsRouteId;
@@ -1269,6 +1498,9 @@ export default function MapClient({ slug }: { slug: string }) {
                   color={r.color}
                   minEle={st.minEle}
                   maxEle={st.maxEle}
+                  onDistanceHover={(distanceKm) =>
+                    updateChartHoverMarker(r._id, distanceKm)
+                  }
                 />
               )}
             </div>
@@ -1278,13 +1510,13 @@ export default function MapClient({ slug }: { slug: string }) {
 
       {/* ============== BOTTOM PANEL ============== */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-[1000] px-3 pb-3 md:right-auto md:w-[360px] md:px-4"
+        className="fixed bottom-0 left-0 right-0 z-[1000] px-3 pb-3 md:inset-auto md:left-3 md:top-1/2 md:-translate-y-1/2 md:px-0 md:pb-0 md:w-auto"
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
       >
-        <div className="mx-auto max-w-sm md:mx-0">
+        <div className="mx-auto max-w-sm md:mx-0 md:w-[76px]">
           {/* Upload progress card */}
           {uploadStats && (
-            <div className="mb-2 rounded-xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl">
+            <div className="mb-2 rounded-xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 px-3 py-2 backdrop-blur-xl md:hidden">
               <div className="mb-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <span
@@ -1326,8 +1558,8 @@ export default function MapClient({ slug }: { slug: string }) {
           )}
 
           {/* Main panel */}
-          <div className="rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 p-3 shadow-xl backdrop-blur-xl">
-            <div className="mb-3 grid grid-cols-4 gap-2">
+          <div className="rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 p-3 shadow-xl backdrop-blur-xl md:p-2">
+            <div className="grid grid-cols-4 gap-2 md:grid-cols-1 md:gap-1.5">
               {/* GPX Upload */}
               <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-[#004cca]/20 bg-[#004cca]/[0.08] p-2.5 transition-all hover:bg-[#004cca]/15 active:scale-95">
                 <span
