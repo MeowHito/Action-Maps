@@ -1305,13 +1305,31 @@ export default function MapClient({ slug }: { slug: string }) {
               }}
               className="pointer-events-auto relative mx-0 max-w-none rounded-t-2xl border border-x-0 border-b-0 border-[#c2c6d9]/30 bg-[#faf8ff]/95 p-3 shadow-xl backdrop-blur-xl md:cursor-move md:rounded-none md:p-4"
             >
-              {/* Header row: track picker (left) + collapse/close (right) */}
-              <div className="mb-2 flex items-center gap-2">
+              <div className="mb-2 flex items-center gap-2 overflow-x-auto md:gap-3">
+                <div
+                  className="flex shrink-0 items-baseline gap-1 text-[#191b24]"
+                  style={headlineFont}
+                >
+                  <span className="text-2xl font-bold leading-none md:text-xl">
+                    {st.distanceKm.toFixed(1)}
+                  </span>
+                  <span className="text-sm font-bold text-[#737687]">km</span>
+                </div>
+                <div
+                  className="hidden shrink-0 items-center gap-1 text-[10px] font-semibold text-[#424656] md:flex md:text-[9px]"
+                  style={{ fontFamily: 'Inter, sans-serif' }}
+                >
+                  <span className="text-[#17803d]">↑ {st.elevGain} m gain</span>
+                  <span className="text-[#c2c6d9]">·</span>
+                  <span className="text-[#ba1a1a]">↓ {st.elevLoss} m loss</span>
+                  <span className="text-[#c2c6d9]">·</span>
+                  <span>max {st.maxEle} m</span>
+                </div>
                 <button
                   onClick={() => setTrackPickerOpen((v) => !v)}
                   aria-haspopup="listbox"
                   aria-expanded={trackPickerOpen}
-                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-[#ecedfa] px-2.5 py-1.5 text-left transition-colors hover:bg-[#e1e2ee]"
+                  className="ml-auto flex min-w-42.5 flex-1 items-center gap-2 rounded-lg bg-[#ecedfa] px-2.5 py-1.5 text-left transition-colors hover:bg-[#e1e2ee] md:min-w-130 md:max-w-180"
                 >
                   <span
                     className="material-symbols-outlined shrink-0 text-[#004cca]"
@@ -1368,6 +1386,17 @@ export default function MapClient({ slug }: { slug: string }) {
                 </button>
               </div>
 
+              <div
+                className="mb-2 flex items-center gap-1 text-[10px] font-semibold text-[#424656] md:hidden"
+                style={{ fontFamily: 'Inter, sans-serif' }}
+              >
+                <span className="text-[#17803d]">↑ {st.elevGain} m gain</span>
+                <span className="text-[#c2c6d9]">·</span>
+                <span className="text-[#ba1a1a]">↓ {st.elevLoss} m loss</span>
+                <span className="text-[#c2c6d9]">·</span>
+                <span>max {st.maxEle} m</span>
+              </div>
+
               {/* Track picker dropdown */}
               {trackPickerOpen && (
                 <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-[#c2c6d9]/40 bg-white shadow-sm">
@@ -1417,25 +1446,6 @@ export default function MapClient({ slug }: { slug: string }) {
                 </div>
               )}
 
-              <div
-                className="flex items-baseline gap-1 text-[#191b24]"
-                style={headlineFont}
-              >
-                <span className="text-2xl font-bold leading-none">
-                  {st.distanceKm.toFixed(1)}
-                </span>
-                <span className="text-sm font-bold text-[#737687]">km</span>
-              </div>
-              <div
-                className="mt-1 text-[10px] font-semibold text-[#424656]"
-                style={{ fontFamily: 'Inter, sans-serif' }}
-              >
-                <span className="text-[#17803d]">↑ {st.elevGain} m gain</span>
-                <span className="mx-1.5 text-[#c2c6d9]">·</span>
-                <span className="text-[#ba1a1a]">↓ {st.elevLoss} m loss</span>
-                <span className="mx-1.5 text-[#c2c6d9]">·</span>
-                <span>max {st.maxEle} m</span>
-              </div>
               {st.profile.length > 2 && (
                 <ElevationChart
                   profile={st.profile}
