@@ -255,13 +255,22 @@ function ElevationChart({
   const pad = 4;
   const maxD = profile[profile.length - 1]?.d || 1;
   const range = Math.max(1, maxEle - minEle);
+  const eleStep = Math.max(1, Math.ceil(range / 4 / 50) * 50);
+  const yStart = Math.floor(minEle / eleStep) * eleStep;
+  const yEnd = Math.ceil(maxEle / eleStep) * eleStep;
+  const yRange = Math.max(1, yEnd - yStart);
   const xy = profile.map((p) => {
     const x = pad + ((p.d / maxD) * (W - pad * 2));
-    const y = pad + (1 - (p.e - minEle) / range) * (H - pad * 2);
+    const y = pad + (1 - (p.e - yStart) / yRange) * (H - pad * 2);
     return [x, y] as const;
   });
   const line = xy.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${H - pad} L${xy[0][0].toFixed(1)},${H - pad} Z`;
+  const xTicks = Array.from({ length: 6 }, (_, i) => (maxD / 5) * i);
+  const yTicks = Array.from(
+    { length: Math.max(2, Math.round((yEnd - yStart) / eleStep) + 1) },
+    (_, i) => yStart + eleStep * i,
+  );
   const emitDistance = (clientX: number, target: EventTarget | null) => {
     if (!onDistanceHover || !(target instanceof SVGSVGElement)) return;
     const rect = target.getBoundingClientRect();
@@ -277,14 +286,20 @@ function ElevationChart({
   };
   return (
     <div className="relative mt-2 rounded-lg bg-white p-1.5">
-      <div className="relative h-20 pl-8 pb-4 md:h-36">
-        <span className="absolute left-0 top-0 text-[8px] font-semibold text-[#737687]">
-          {maxEle} m
-        </span>
-        <span className="absolute bottom-4 left-0 text-[8px] font-semibold text-[#737687]">
-          {minEle} m
-        </span>
-        <div className="absolute bottom-4 left-8 right-0 top-1">
+      <div className="relative h-28 pl-10 pb-5 md:h-36 md:pl-12 md:pb-6">
+        {yTicks.map((tick) => {
+          const pos = ((yEnd - tick) / Math.max(1, yEnd - yStart)) * 100;
+          return (
+            <span
+              key={tick}
+              className="absolute left-0 -translate-y-1/2 text-[8px] font-semibold text-[#737687] md:text-[9px]"
+              style={{ top: `calc(0.25rem + ${pos}%)` }}
+            >
+              {tick} m
+            </span>
+          );
+        })}
+        <div className="absolute bottom-5 left-10 right-0 top-1 md:bottom-6 md:left-12">
           {hoverPoint && (
             <div
               className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full text-[#004cca] drop-shadow-md"
@@ -317,13 +332,44 @@ function ElevationChart({
               e.currentTarget.releasePointerCapture(e.pointerId);
             }}
           >
+            {xTicks.map((tick) => {
+              const x = pad + (tick / maxD) * (W - pad * 2);
+              return (
+                <line
+                  key={`x-${tick}`}
+                  x1={x}
+                  y1={pad}
+                  x2={x}
+                  y2={H - pad}
+                  stroke="#c2c6d9"
+                  strokeWidth={0.35}
+                  opacity={0.6}
+                />
+              );
+            })}
+            {yTicks.map((tick) => {
+              const y = pad + (1 - (tick - yStart) / Math.max(1, yEnd - yStart)) * (H - pad * 2);
+              return (
+                <line
+                  key={`y-${tick}`}
+                  x1={pad}
+                  y1={y}
+                  x2={W - pad}
+                  y2={y}
+                  stroke="#c2c6d9"
+                  strokeWidth={0.35}
+                  opacity={0.6}
+                />
+              );
+            })}
             <path d={area} fill={color} opacity={0.18} />
             <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
           </svg>
         </div>
-        <div className="absolute bottom-0 left-8 right-0 flex justify-between text-[8px] font-semibold text-[#737687]">
-          <span>0 km</span>
-          <span>{maxD.toFixed(maxD >= 10 ? 1 : 2)} km</span>
+        <div className="absolute bottom-0 left-10 right-0 flex justify-between text-[9px] font-bold text-[#424656] md:left-12 md:text-[9px] md:text-[#737687]">
+          {xTicks.map((tick) => (
+            <span key={tick}>{tick.toFixed(maxD >= 10 ? 0 : 1)} km</span>
+          ))}
         </div>
       </div>
     </div>
@@ -1408,7 +1454,7 @@ export default function MapClient({ slug }: { slug: string }) {
 
       {/* ============== BOTTOM PANEL ============== */}
       <div
-        className="fixed left-2 top-1/2 z-[1000] w-auto -translate-y-1/2 px-0 pb-0 md:left-3"
+        className="fixed left-2 top-16 z-[1000] w-auto px-0 pb-0 md:left-3 md:top-1/2 md:-translate-y-1/2"
       >
         <div className="mx-0 w-11 md:w-[76px]">
           {/* Upload progress card */}
@@ -1455,42 +1501,48 @@ export default function MapClient({ slug }: { slug: string }) {
           )}
 
           {/* Main panel */}
-          <div className="rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/88 p-1.5 shadow-xl backdrop-blur-xl md:p-2">
+          <div className="p-0 md:rounded-2xl md:border md:border-[#c2c6d9]/30 md:bg-[#faf8ff]/88 md:p-2 md:shadow-xl md:backdrop-blur-xl">
             <div className="grid grid-cols-1 gap-1.5">
               <button
                 onClick={onLocateMe}
                 disabled={locating}
                 aria-label="Locate me"
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2 transition-all hover:bg-[#e7e7f4] active:scale-95 disabled:opacity-60 md:hidden"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 disabled:opacity-60 md:hidden"
               >
-                <span
-                  className="material-symbols-outlined text-base text-[#004cca]"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  my_location
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md">
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    my_location
+                  </span>
                 </span>
               </button>
 
               <button
                 onClick={toggleMapStyle}
                 aria-label="Toggle map style"
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2 transition-all hover:bg-[#e7e7f4] active:scale-95 md:hidden"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:hidden"
               >
-                <span
-                  className="material-symbols-outlined text-base text-[#424656]"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  {mapStyle === 'street' ? 'layers' : 'map'}
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md">
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    {mapStyle === 'street' ? 'layers' : 'map'}
+                  </span>
                 </span>
               </button>
 
               {/* GPX Upload */}
-              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-[#004cca]/20 bg-[#004cca]/[0.08] p-2 transition-all hover:bg-[#004cca]/15 active:scale-95 md:p-2.5">
-                <span
-                  className="material-symbols-outlined text-base text-[#004cca] md:text-2xl"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  map
+              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border-0 bg-transparent p-1.5 transition-all active:scale-95 md:border md:border-[#004cca]/20 md:bg-[#004cca]/8 md:p-2.5 md:hover:bg-[#004cca]/15">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
+                  <span
+                    className="material-symbols-outlined md:text-2xl"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    map
+                  </span>
                 </span>
                 <span
                   className="hidden text-[8px] font-bold uppercase tracking-wider text-[#004cca] md:block"
@@ -1513,13 +1565,15 @@ export default function MapClient({ slug }: { slug: string }) {
               {/* Tracks list */}
               <button
                 onClick={() => setRoutesOpen(true)}
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2 transition-all hover:bg-[#e7e7f4] active:scale-95 md:p-2.5"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
               >
-                <span
-                  className="material-symbols-outlined text-base text-[#424656] md:text-2xl"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  route
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
+                  <span
+                    className="material-symbols-outlined md:text-2xl"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    route
+                  </span>
                 </span>
                 <span
                   className="hidden text-[8px] font-bold uppercase tracking-wider text-[#424656] md:block"
@@ -1538,12 +1592,14 @@ export default function MapClient({ slug }: { slug: string }) {
               </button>
 
               {/* Photo upload */}
-              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl p-2 shadow-md transition-transform active:scale-95 kinetic-gradient md:p-2.5">
-                <span
-                  className="material-symbols-outlined text-base text-white md:text-2xl"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  add_a_photo
+              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 shadow-none transition-transform active:scale-95 md:p-2.5 md:shadow-md kinetic-gradient">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md md:h-auto md:w-auto md:bg-transparent md:text-white md:shadow-none">
+                  <span
+                    className="material-symbols-outlined md:text-2xl"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    add_a_photo
+                  </span>
                 </span>
                 <span
                   className="hidden text-[8px] font-bold uppercase tracking-wider text-white md:block"
@@ -1574,13 +1630,15 @@ export default function MapClient({ slug }: { slug: string }) {
               {/* Album */}
               <button
                 onClick={() => setAlbumOpen(true)}
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-[#ecedfa] p-2 transition-all hover:bg-[#e7e7f4] active:scale-95 md:p-2.5"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
               >
-                <span
-                  className="material-symbols-outlined text-base text-[#424656] md:text-2xl"
-                  style={{ fontVariationSettings: "'wght' 300" }}
-                >
-                  photo_library
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
+                  <span
+                    className="material-symbols-outlined md:text-2xl"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    photo_library
+                  </span>
                 </span>
                 <span
                   className="hidden text-[8px] font-bold uppercase tracking-wider text-[#424656] md:block"
