@@ -163,9 +163,9 @@ export default function Home() {
       </header>
 
       {/* ---------- Main ---------- */}
-      <main className="flex-1 pt-10 pb-28 md:pb-12 px-4 md:ml-16">
+      <main className="flex-1 pt-20 pb-28 md:pb-12 px-4 md:ml-16">
         {/* Hero + create */}
-        <section className="mt-2 mb-6 relative">
+        <section className="mt-4 mb-6 relative">
           <div className="max-w-md mx-auto">
 
             <h2
