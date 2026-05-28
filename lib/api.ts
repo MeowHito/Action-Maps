@@ -1,7 +1,16 @@
-import type { EventDoc, PhotoDoc, RouteDoc } from './types';
+import type { EventDoc, EventRole, PhotoDoc, RouteDoc } from './types';
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+
+function eventAuthHeader(slug: string): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const raw = localStorage.getItem('am_event_tokens');
+  if (!raw) return {};
+  const tokens = JSON.parse(raw) as Record<string, { token: string }>;
+  const et = tokens[slug];
+  return et ? { Authorization: `Bearer ${et.token}` } : {};
+}
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -16,6 +25,23 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 export const api = {
   base: API_BASE,
 
+  // ---- Auth ----
+  verifyEventCode: (slug: string, code: string) =>
+    fetch(`${API_BASE}/api/auth/event/${slug}/token`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ code }),
+    }).then(handle<{ token: string; role: EventRole }>),
+
+  siteAdminEventToken: (slug: string) => {
+    const secret = process.env.NEXT_PUBLIC_SITE_ADMIN_SECRET ?? '';
+    return fetch(`${API_BASE}/api/auth/event/${slug}/site-admin-token`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ secret }),
+    }).then(handle<{ token: string; role: EventRole }>);
+  },
+
   // ---- Events ----
   listEvents: () =>
     fetch(`${API_BASE}/api/events`, { cache: 'no-store' }).then(
@@ -25,6 +51,9 @@ export const api = {
     slug: string;
     name: string;
     description?: string;
+    adminCode?: string;
+    uploadCode?: string;
+    viewCode?: string;
   }) =>
     fetch(`${API_BASE}/api/events`, {
       method: 'POST',
@@ -57,13 +86,15 @@ export const api = {
     if (color) fd.append('color', color);
     return fetch(`${API_BASE}/api/events/${slug}/routes`, {
       method: 'POST',
+      headers: eventAuthHeader(slug),
       body: fd,
     }).then(handle<RouteDoc>);
   },
-  deleteRoute: (id: string) =>
-    fetch(`${API_BASE}/api/routes/${id}`, { method: 'DELETE' }).then(
-      handle<{ ok: true }>,
-    ),
+  deleteRoute: (id: string, slug: string) =>
+    fetch(`${API_BASE}/api/routes/${id}`, {
+      method: 'DELETE',
+      headers: eventAuthHeader(slug),
+    }).then(handle<{ ok: true }>),
 
   // ---- Photos ----
   listPhotos: (slug: string) =>
@@ -97,6 +128,8 @@ export const api = {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_BASE}/api/events/${slug}/photos`);
       xhr.responseType = 'text';
+      const authH = eventAuthHeader(slug);
+      if (authH.Authorization) xhr.setRequestHeader('Authorization', authH.Authorization);
       // Server-side HEIC decode + sharp can take 10-20 s for a 4 MB iPhone
       // photo; give mobile uploads plenty of headroom before we give up.
       xhr.timeout = 120_000;
@@ -130,8 +163,9 @@ export const api = {
       xhr.send(fd);
     });
   },
-  deletePhoto: (id: string) =>
-    fetch(`${API_BASE}/api/photos/${id}`, { method: 'DELETE' }).then(
-      handle<{ ok: true }>,
-    ),
+  deletePhoto: (id: string, slug: string) =>
+    fetch(`${API_BASE}/api/photos/${id}`, {
+      method: 'DELETE',
+      headers: eventAuthHeader(slug),
+    }).then(handle<{ ok: true }>),
 };

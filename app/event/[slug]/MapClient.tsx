@@ -8,7 +8,7 @@ import 'leaflet-gpx';
 import { api } from '@/lib/api';
 import { getSocket, joinEvent } from '@/lib/socket';
 import { extractGps, extractTakenAt, processForUpload } from '@/lib/image';
-import type { EventDoc, PhotoDoc, RouteDoc } from '@/lib/types';
+import type { EventDoc, EventRole, PhotoDoc, RouteDoc } from '@/lib/types';
 
 type MarkerClusterGroup = L.MarkerClusterGroup;
 type AnyMarker = L.Marker & { _photoId?: string; options: L.MarkerOptions & { imgUrl?: string } };
@@ -386,7 +386,10 @@ const TRACK_COLORS = [
   '#ff3399',
 ];
 
-export default function MapClient({ slug }: { slug: string }) {
+export default function MapClient({ slug, role }: { slug: string; role: EventRole }) {
+  const canUploadPhoto = role === 'admin' || role === 'upload';
+  const canUploadRoute = role === 'admin';
+  const canDelete = role === 'admin';
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const clusterRef = useRef<MarkerClusterGroup | null>(null);
@@ -1055,7 +1058,7 @@ export default function MapClient({ slug }: { slug: string }) {
 
   const onDeletePhoto = async (id: string) => {
     try {
-      await api.deletePhoto(id);
+      await api.deletePhoto(id, slug);
     } catch (err) {
       alert((err as Error).message);
     }
@@ -1064,7 +1067,7 @@ export default function MapClient({ slug }: { slug: string }) {
   const onDeleteRoute = async (id: string) => {
     if (!confirm('Delete this route?')) return;
     try {
-      await api.deleteRoute(id);
+      await api.deleteRoute(id, slug);
     } catch (err) {
       alert((err as Error).message);
     }
@@ -1602,7 +1605,7 @@ export default function MapClient({ slug }: { slug: string }) {
               </button>
 
               {/* Photo upload */}
-              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 shadow-none transition-transform active:scale-95 md:p-2.5 md:shadow-md kinetic-gradient">
+              {canUploadPhoto && <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 shadow-none transition-transform active:scale-95 md:p-2.5 md:shadow-md kinetic-gradient">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md md:h-auto md:w-auto md:bg-transparent md:text-white md:shadow-none">
                   <span
                     className="material-symbols-outlined md:text-2xl"
@@ -1635,7 +1638,7 @@ export default function MapClient({ slug }: { slug: string }) {
                     e.currentTarget.value = '';
                   }}
                 />
-              </label>
+              </label>}
 
               {/* Album */}
               <button
@@ -1692,6 +1695,7 @@ export default function MapClient({ slug }: { slug: string }) {
           onClose={() => setRoutesOpen(false)}
         >
           <div className="flex-shrink-0 px-4 pb-2 pt-3">
+            {canUploadRoute && (
             <label className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#004cca]/20 bg-[#004cca]/[0.08] py-2.5 transition-colors hover:bg-[#004cca]/15">
               <span
                 className="material-symbols-outlined text-lg text-[#004cca]"
@@ -1716,6 +1720,7 @@ export default function MapClient({ slug }: { slug: string }) {
                 }}
               />
             </label>
+            )}
           </div>
           <div className="flex-1 space-y-2 overflow-y-auto px-4 py-2">
             {routes.length === 0 ? (
@@ -1846,6 +1851,7 @@ export default function MapClient({ slug }: { slug: string }) {
                         {isActive ? 'HIDE' : 'SHOW KM'}
                       </button>
                     )}
+                    {canDelete && (
                     <button
                       onClick={() => onDeleteRoute(r._id)}
                       aria-label="Delete track"
@@ -1858,6 +1864,7 @@ export default function MapClient({ slug }: { slug: string }) {
                         delete
                       </span>
                     </button>
+                    )}
                   </div>
                   {st && isActive && (
                     <div className="mt-2">
@@ -1968,7 +1975,7 @@ export default function MapClient({ slug }: { slug: string }) {
                 {lightboxIdx + 1} / {photos.length}
               </span>
             </div>
-            <button
+            {canDelete && <button
               onClick={async () => {
                 await onDeletePhoto(currentPhoto._id);
                 setLightboxIdx((idx) => {
@@ -1988,7 +1995,7 @@ export default function MapClient({ slug }: { slug: string }) {
               >
                 ลบ
               </span>
-            </button>
+            </button>}
           </div>
 
           {/* Prev / Next */}

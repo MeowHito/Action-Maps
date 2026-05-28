@@ -1,3 +1,5 @@
+export type EventRole = 'admin' | 'upload' | 'view';
+
 export interface EventDoc {
   _id: string;
   slug: string;
@@ -7,6 +9,9 @@ export interface EventDoc {
   endsAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  hasAdminCode?: boolean;
+  hasUploadCode?: boolean;
+  hasViewCode?: boolean;
 }
 
 export interface PhotoDoc {

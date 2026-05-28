@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, FormEvent } from 'react';
+import { isLoggedIn, getSession, logout } from '@/lib/auth';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { EventDoc } from '@/lib/types';
@@ -19,6 +20,20 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [tracksOpen, setTracksOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isLoggedIn()) {
+      setIsAdmin(true);
+      setCurrentUser(getSession()?.username ?? null);
+    }
+  }, []);
+
+  const onLogout = () => {
+    logout();
+    window.location.replace('/');
+  };
 
   const load = async () => {
     try {
@@ -33,7 +48,8 @@ export default function Home() {
   };
 
   useEffect(() => {
-    load();
+    void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onCreate = async (e: FormEvent<HTMLFormElement>) => {
@@ -43,10 +59,13 @@ export default function Home() {
     const name = String(fd.get('name') ?? '').trim();
     if (!name) return;
     const slug = slugify(name) || `map-${Date.now()}`;
+    const adminCode = String(fd.get('adminCode') ?? '').trim() || undefined;
+    const uploadCode = String(fd.get('uploadCode') ?? '').trim() || undefined;
+    const viewCode = String(fd.get('viewCode') ?? '').trim() || undefined;
     try {
       setCreating(true);
       setError(null);
-      await api.createEvent({ slug, name });
+      await api.createEvent({ slug, name, adminCode, uploadCode, viewCode });
       form.reset();
       await load();
     } catch (err) {
@@ -116,6 +135,31 @@ export default function Home() {
             GPX ACTION
           </h1>
         </div>
+        <div className="flex items-center gap-2 mr-2">
+          {isAdmin ? (
+            <>
+              {currentUser && (
+                <span className="text-xs text-[#737687] hidden sm:block">{currentUser}</span>
+              )}
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                className="flex items-center gap-1 text-xs text-[#737687] hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"
+                style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+              >
+                <span className="material-symbols-outlined text-base">logout</span>
+              </button>
+            </>
+          ) : (
+            <Link
+              href="/actiononly1112"
+              title="Admin"
+              className="flex items-center justify-center w-7 h-7 rounded-full text-[#c2c6d9] hover:text-[#737687] transition-colors"
+            >
+              <span className="material-symbols-outlined text-base">manage_accounts</span>
+            </Link>
+          )}
+        </div>
       </header>
 
       {/* ---------- Main ---------- */}
@@ -123,19 +167,18 @@ export default function Home() {
         {/* Hero + create */}
         <section className="mt-2 mb-6 relative">
           <div className="max-w-md mx-auto">
-           
 
             <h2
               className="text-2xl font-black tracking-tighter text-[#191b24] leading-[0.95] mb-2"
               style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
-            ><br />
+            >
               <span className="text-[#004cca]">Action Team Photographer</span>
             </h2>
             <p className="text-[#424656] text-sm leading-snug mb-6 max-w-[95%]">
-              Upload GPX files and photos to create interactive shared maps.
+              {isAdmin ? 'สร้างและจัดการกิจกรรม GPX ของคุณ' : 'เลือกกิจกรรมและใส่รหัสเพื่อเข้าร่วม'}
             </p>
 
-            <form onSubmit={onCreate} className="space-y-4">
+            {isAdmin && <form onSubmit={onCreate} className="space-y-4">
               <div className="relative">
                 <input
                   name="name"
@@ -144,13 +187,53 @@ export default function Home() {
                   style={{
                     fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
                   }}
-                  placeholder="Map Name "
+                  placeholder="Map Name"
                   type="text"
                 />
                 <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#737687] text-lg">
                   edit
                 </span>
               </div>
+
+              <div className="rounded-xl border border-[#c2c6d9]/40 bg-[#f2f3ff] p-3 space-y-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-[#737687]" style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}>
+                  Access Codes
+                </p>
+                <div className="relative">
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#004cca]" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}>admin_panel_settings</span>
+                  <input
+                    name="adminCode"
+                    type="password"
+                    autoComplete="new-password"
+                    className="w-full bg-transparent border-0 border-b border-[#c2c6d9] focus:border-[#004cca] focus:ring-0 focus:outline-none pl-6 py-1.5 text-sm placeholder:text-[#737687] transition-all"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                    placeholder="Admin code (optional)"
+                  />
+                </div>
+                <div className="relative">
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#424656]" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}>add_a_photo</span>
+                  <input
+                    name="uploadCode"
+                    type="password"
+                    autoComplete="new-password"
+                    className="w-full bg-transparent border-0 border-b border-[#c2c6d9] focus:border-[#004cca] focus:ring-0 focus:outline-none pl-6 py-1.5 text-sm placeholder:text-[#737687] transition-all"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                    placeholder="Upload-only code (optional)"
+                  />
+                </div>
+                <div className="relative">
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#737687]" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}>visibility</span>
+                  <input
+                    name="viewCode"
+                    type="password"
+                    autoComplete="new-password"
+                    className="w-full bg-transparent border-0 border-b border-[#c2c6d9] focus:border-[#004cca] focus:ring-0 focus:outline-none pl-6 py-1.5 text-sm placeholder:text-[#737687] transition-all"
+                    style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                    placeholder="View-only code (optional)"
+                  />
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={creating}
@@ -166,12 +249,12 @@ export default function Home() {
                   {error}
                 </p>
               )}
-            </form>
+            </form>}
           </div>
         </section>
 
-        {/* Feature cards */}
-        <section className="grid grid-cols-2 gap-3 max-w-md mx-auto">
+        {/* Feature cards — admin only */}
+        {isAdmin && <section className="grid grid-cols-2 gap-3 max-w-md mx-auto">
           <div className="col-span-2 p-4 bg-[#f2f3ff] rounded-xl flex gap-4 items-start border border-[#c2c6d9]/20">
             <span
               className="material-symbols-outlined text-[#004cca] text-xl mt-0.5"
@@ -192,7 +275,7 @@ export default function Home() {
             </div>
           </div>
           
-        </section>
+        </section>}
 
         {/* Event ledger */}
         <section className="mt-8 max-w-md mx-auto md:mt-14">
@@ -216,7 +299,7 @@ export default function Home() {
             <p className="py-6 text-center text-xs text-[#737687]">Loading…</p>
           ) : events.length === 0 ? (
             <div className="rounded-xl border border-dashed border-[#c2c6d9] bg-[#f2f3ff]/60 px-4 py-6 text-center text-xs text-[#737687]">
-              No journeys yet. Create your first one above.
+              {isAdmin ? 'No journeys yet. Create your first one above.' : 'ยังไม่มีกิจกรรม'}
             </div>
           ) : (
             <ul className="space-y-2">
@@ -261,6 +344,7 @@ export default function Home() {
                       {copiedSlug === ev.slug ? 'check' : 'content_copy'}
                     </span>
                   </button>
+                  {isAdmin && (
                   <button
                     onClick={() => onDelete(ev.slug)}
                     aria-label={`Delete ${ev.slug}`}
@@ -271,6 +355,7 @@ export default function Home() {
                       delete
                     </span>
                   </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -484,6 +569,7 @@ export default function Home() {
                           {copiedSlug === ev.slug ? 'check' : 'content_copy'}
                         </span>
                       </button>
+                      {isAdmin && (
                       <button
                         onClick={async () => {
                           await onDelete(ev.slug);
@@ -496,6 +582,7 @@ export default function Home() {
                           delete
                         </span>
                       </button>
+                      )}
                     </li>
                   ))}
                 </ul>
