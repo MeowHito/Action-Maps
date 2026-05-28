@@ -33,6 +33,17 @@ export default function EventPageClient({ slug }: { slug: string }) {
         setChecking(false);
         return;
       }
+      // Try silent probe: events with no codes auto-grant admin
+      try {
+        const res = await api.verifyEventCode(slug, '');
+        setEventToken(slug, res.role, res.token);
+        setRole(res.role);
+        setChecking(false);
+        return;
+      } catch {
+        // Event has codes configured — fall through
+      }
+
       if (isLoggedIn()) {
         try {
           const res = await api.siteAdminEventToken(slug);
