@@ -115,8 +115,17 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <p className="mt-4 text-center">
+          <Link
+            href="/forgot-password"
+            className="text-xs text-[#737687] hover:text-[#004cca] hover:underline transition-colors"
+          >
+            ลืมรหัสผ่าน?
+          </Link>
+        </p>
+
         {/* Register link */}
-        <p className="mt-6 text-center text-xs text-[#737687]">
+        <p className="mt-4 text-center text-xs text-[#737687]">
           New here?{' '}
           <Link
             href="/register"

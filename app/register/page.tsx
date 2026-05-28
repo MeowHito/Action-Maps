@@ -6,6 +6,7 @@ import { register, isLoggedIn } from '@/lib/auth';
 
 export default function RegisterPage() {
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +32,12 @@ export default function RegisterPage() {
       setError('Passwords do not match');
       return;
     }
+    if (!email.trim() || !email.includes('@')) {
+      setError('กรุณาใส่อีเมลที่ถูกต้อง');
+      return;
+    }
     setLoading(true);
-    const result = await register(username.trim(), password);
+    const result = await register(username.trim(), password, email.trim());
     if (result.ok) {
       setDone(true);
     } else {
@@ -119,6 +124,22 @@ export default function RegisterPage() {
             />
             <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#737687] text-lg">
               person
+            </span>
+          </div>
+
+          <div className="relative">
+            <input
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email address"
+              className="w-full bg-transparent border-0 border-b-2 border-[#c2c6d9] focus:border-[#004cca] focus:ring-0 focus:outline-none px-0 py-2 font-medium text-base placeholder:text-[#737687] transition-all"
+              style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+            />
+            <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#737687] text-lg">
+              mail
             </span>
           </div>
 
