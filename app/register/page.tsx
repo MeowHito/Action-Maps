@@ -63,7 +63,7 @@ export default function RegisterPage() {
             You can now sign in with your new account.
           </p>
           <Link
-            href="/actiononly1112"
+            href="/join"
             className="block w-full kinetic-gradient text-white font-bold uppercase tracking-widest py-3.5 rounded-lg shadow-md text-sm text-center"
             style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
           >
@@ -178,7 +178,7 @@ export default function RegisterPage() {
         <p className="mt-6 text-center text-xs text-[#737687]">
           Already have an account?{' '}
           <Link
-            href="/actiononly1112"
+            href="/join"
             className="text-[#004cca] font-semibold hover:underline"
           >
             Sign in

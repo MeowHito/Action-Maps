@@ -152,7 +152,7 @@ export default function Home() {
             </>
           ) : (
             <Link
-              href="/actiononly1112"
+              href="/join"
               title="Admin"
               className="flex items-center justify-center w-7 h-7 rounded-full text-[#c2c6d9] hover:text-[#737687] transition-colors"
             >
