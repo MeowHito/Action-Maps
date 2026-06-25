@@ -3,8 +3,12 @@ const EVENT_TOKENS_KEY = 'am_event_tokens';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
+export type SiteRole = 'super' | 'user';
+
 export interface Session {
   username: string;
+  email: string;
+  role: SiteRole;
   token: string;
 }
 
@@ -43,8 +47,18 @@ export async function login(
       const body = await res.json().catch(() => ({}));
       return { ok: false, error: body?.message ?? 'Invalid username or password' };
     }
-    const data = (await res.json()) as { username: string; token: string };
-    const session: Session = { username: data.username, token: data.token };
+    const data = (await res.json()) as {
+      username: string;
+      email: string;
+      role: SiteRole;
+      token: string;
+    };
+    const session: Session = {
+      username: data.username,
+      email: data.email,
+      role: data.role,
+      token: data.token,
+    };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     return { ok: true };
   } catch {
@@ -98,6 +112,14 @@ export function getSession(): Session | null {
 
 export function isLoggedIn(): boolean {
   return getSession() !== null;
+}
+
+export function getRole(): SiteRole | null {
+  return getSession()?.role ?? null;
+}
+
+export function isSuperAdmin(): boolean {
+  return getSession()?.role === 'super';
 }
 
 // ---- Event tokens (per-event role) ----

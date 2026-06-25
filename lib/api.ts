@@ -12,6 +12,30 @@ function eventAuthHeader(slug: string): Record<string, string> {
   return et ? { Authorization: `Bearer ${et.token}` } : {};
 }
 
+/** Authorization header for the logged-in site user (owner/super-admin). */
+function userAuthHeader(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const raw = localStorage.getItem('am_session');
+  if (!raw) return {};
+  try {
+    const s = JSON.parse(raw) as { token?: string };
+    return s.token ? { Authorization: `Bearer ${s.token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+export interface EventCodeField {
+  value: string;
+  set: boolean;
+  legacy: boolean;
+}
+export interface EventCodes {
+  adminCode: EventCodeField;
+  uploadCode: EventCodeField;
+  viewCode: EventCodeField;
+}
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -47,6 +71,12 @@ export const api = {
     fetch(`${API_BASE}/api/events`, { cache: 'no-store' }).then(
       handle<EventDoc[]>,
     ),
+  // Events the logged-in user may manage (super-admin: all; user: own).
+  listMyEvents: () =>
+    fetch(`${API_BASE}/api/events/mine`, {
+      cache: 'no-store',
+      headers: userAuthHeader(),
+    }).then(handle<EventDoc[]>),
   createEvent: (data: {
     slug: string;
     name: string;
@@ -57,7 +87,7 @@ export const api = {
   }) =>
     fetch(`${API_BASE}/api/events`, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...userAuthHeader() },
       body: JSON.stringify(data),
     }).then(handle<EventDoc>),
   getEvent: (slug: string) =>
@@ -65,9 +95,32 @@ export const api = {
       handle<EventDoc>,
     ),
   deleteEvent: (slug: string) =>
-    fetch(`${API_BASE}/api/events/${slug}`, { method: 'DELETE' }).then(
-      handle<{ ok: true }>,
-    ),
+    fetch(`${API_BASE}/api/events/${slug}`, {
+      method: 'DELETE',
+      headers: userAuthHeader(),
+    }).then(handle<{ ok: true }>),
+
+  // ---- Event access codes (owner / super-admin) ----
+  getEventCodes: (slug: string) =>
+    fetch(`${API_BASE}/api/events/${slug}/codes`, {
+      cache: 'no-store',
+      headers: userAuthHeader(),
+    }).then(handle<EventCodes>),
+  updateEventCodes: (
+    slug: string,
+    codes: { adminCode?: string; uploadCode?: string; viewCode?: string },
+  ) =>
+    fetch(`${API_BASE}/api/events/${slug}/codes`, {
+      method: 'PATCH',
+      headers: { ...jsonHeaders, ...userAuthHeader() },
+      body: JSON.stringify(codes),
+    }).then(handle<{ ok: true }>),
+  // Get an admin event token for an owned event without knowing the code.
+  ownerEventToken: (slug: string) =>
+    fetch(`${API_BASE}/api/auth/event/${slug}/owner-token`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...userAuthHeader() },
+    }).then(handle<{ token: string; role: EventRole }>),
 
   // ---- Routes ----
   listRoutes: (slug: string) =>

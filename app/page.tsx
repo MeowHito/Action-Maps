@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, FormEvent } from 'react';
-import { isLoggedIn, getSession, logout } from '@/lib/auth';
+import { isLoggedIn, getSession, logout, isSuperAdmin, setEventToken } from '@/lib/auth';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import type { EventDoc } from '@/lib/types';
+import EventCodesPanel from './EventCodesPanel';
 
 function slugify(name: string): string {
   return name
@@ -22,11 +23,14 @@ export default function Home() {
   const [tracksOpen, setTracksOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [superAdmin, setSuperAdmin] = useState(false);
+  const [openCodes, setOpenCodes] = useState<string | null>(null);
 
   useEffect(() => {
     if (isLoggedIn()) {
       setIsAdmin(true);
       setCurrentUser(getSession()?.username ?? null);
+      setSuperAdmin(isSuperAdmin());
     }
   }, []);
 
@@ -39,7 +43,7 @@ export default function Home() {
     try {
       setLoading(true);
       setError(null);
-      setEvents(await api.listEvents());
+      setEvents(await (isLoggedIn() ? api.listMyEvents() : api.listEvents()));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -80,6 +84,17 @@ export default function Home() {
     try {
       await api.deleteEvent(slug);
       await load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  // Open an owned event as admin without typing its code.
+  const onOpenAdmin = async (slug: string) => {
+    try {
+      const { token, role } = await api.ownerEventToken(slug);
+      setEventToken(slug, role, token);
+      window.location.href = `/event/${slug}`;
     } catch (err) {
       setError((err as Error).message);
     }
@@ -140,6 +155,15 @@ export default function Home() {
             <>
               {currentUser && (
                 <span className="text-xs text-[#737687] hidden sm:block">{currentUser}</span>
+              )}
+              {superAdmin && (
+                <span
+                  className="rounded-full bg-[#004cca]/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[#004cca]"
+                  style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                  title="Super admin — เห็นและจัดการทุกงาน"
+                >
+                  All Events
+                </span>
               )}
               <button
                 onClick={onLogout}
@@ -306,55 +330,86 @@ export default function Home() {
               {events.map((ev) => (
                 <li
                   key={ev._id}
-                  className="group flex items-center justify-between gap-3 rounded-xl border border-[#c2c6d9]/30 bg-white px-3.5 py-3 transition hover:border-[#004cca]/40 hover:shadow-sm"
+                  className="group rounded-xl border border-[#c2c6d9]/30 bg-white px-3.5 py-3 transition hover:border-[#004cca]/40 hover:shadow-sm"
                 >
-                  <Link
-                    href={`/event/${ev.slug}`}
-                    className="flex min-w-0 flex-1 items-center gap-3"
-                  >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f2f3ff] text-[#004cca]">
-                      <span className="material-symbols-outlined text-base">
-                        map
+                  <div className="flex items-center justify-between gap-3">
+                    <Link
+                      href={`/event/${ev.slug}`}
+                      className="flex min-w-0 flex-1 items-center gap-3"
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f2f3ff] text-[#004cca]">
+                        <span className="material-symbols-outlined text-base">
+                          map
+                        </span>
                       </span>
-                    </span>
-                    <div className="min-w-0">
-                      <p
-                        className="truncate text-sm font-bold text-[#191b24] group-hover:text-[#004cca]"
-                        style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                      <div className="min-w-0">
+                        <p
+                          className="truncate text-sm font-bold text-[#191b24] group-hover:text-[#004cca]"
+                          style={{ fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' }}
+                        >
+                          {ev.name}
+                        </p>
+                        <p className="mt-0.5 truncate text-[10px] text-[#737687]">
+                          /{ev.slug} ·{' '}
+                          {new Date(ev.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </Link>
+                    {isAdmin && (
+                      <button
+                        onClick={() =>
+                          setOpenCodes((s) => (s === ev.slug ? null : ev.slug))
+                        }
+                        aria-label={`Manage codes for ${ev.slug}`}
+                        title="จัดการรหัส"
+                        className={`shrink-0 rounded-lg p-1.5 transition-colors ${
+                          openCodes === ev.slug
+                            ? 'bg-[#004cca]/10 text-[#004cca]'
+                            : 'text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]'
+                        }`}
                       >
-                        {ev.name}
-                      </p>
-                      <p className="mt-0.5 truncate text-[10px] text-[#737687]">
-                        /{ev.slug} ·{' '}
-                        {new Date(ev.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </Link>
-                  <button
-                    onClick={() => onShare(ev)}
-                    aria-label={`Copy link for ${ev.slug}`}
-                    title={copiedSlug === ev.slug ? 'Copied!' : 'Copy link'}
-                    className={`shrink-0 rounded-lg p-1.5 transition-colors ${
-                      copiedSlug === ev.slug
-                        ? 'bg-[#e4f6ea] text-[#17803d]'
-                        : 'text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]'
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-base">
-                      {copiedSlug === ev.slug ? 'check' : 'content_copy'}
-                    </span>
-                  </button>
-                  {isAdmin && (
-                  <button
-                    onClick={() => onDelete(ev.slug)}
-                    aria-label={`Delete ${ev.slug}`}
-                    title="Delete journey"
-                    className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-red-50 hover:text-red-600"
-                  >
-                    <span className="material-symbols-outlined text-base">
-                      delete
-                    </span>
-                  </button>
+                        <span className="material-symbols-outlined text-base">key</span>
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        onClick={() => onOpenAdmin(ev.slug)}
+                        aria-label={`Open ${ev.slug} as admin`}
+                        title="เปิดแบบแอดมิน"
+                        className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]"
+                      >
+                        <span className="material-symbols-outlined text-base">tune</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onShare(ev)}
+                      aria-label={`Copy link for ${ev.slug}`}
+                      title={copiedSlug === ev.slug ? 'Copied!' : 'Copy link'}
+                      className={`shrink-0 rounded-lg p-1.5 transition-colors ${
+                        copiedSlug === ev.slug
+                          ? 'bg-[#e4f6ea] text-[#17803d]'
+                          : 'text-[#737687] hover:bg-[#f2f3ff] hover:text-[#004cca]'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-base">
+                        {copiedSlug === ev.slug ? 'check' : 'content_copy'}
+                      </span>
+                    </button>
+                    {isAdmin && (
+                    <button
+                      onClick={() => onDelete(ev.slug)}
+                      aria-label={`Delete ${ev.slug}`}
+                      title="Delete journey"
+                      className="shrink-0 rounded-lg p-1.5 text-[#737687] hover:bg-red-50 hover:text-red-600"
+                    >
+                      <span className="material-symbols-outlined text-base">
+                        delete
+                      </span>
+                    </button>
+                    )}
+                  </div>
+                  {isAdmin && openCodes === ev.slug && (
+                    <EventCodesPanel slug={ev.slug} />
                   )}
                 </li>
               ))}
