@@ -429,6 +429,26 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     setTrackPickerOpen(false);
     setStatsPanelPos(null);
   }, [activeStatsRouteId]);
+  // Mirror of activeStatsRouteId for async callbacks (GPX 'loaded' events).
+  const activeStatsRouteIdRef = useRef<string | null>(null);
+  // Raise the selected track's polyline above every other track so its colour
+  // is visible where routes overlap.
+  const bringActiveRouteToFront = useCallback(() => {
+    const id = activeStatsRouteIdRef.current;
+    if (!id) return;
+    const layer = routeLayersRef.current.get(id) as
+      | (L.Layer & { bringToFront?: () => void })
+      | undefined;
+    try {
+      layer?.bringToFront?.();
+    } catch {
+      /* no-op */
+    }
+  }, []);
+  useEffect(() => {
+    activeStatsRouteIdRef.current = activeStatsRouteId;
+    bringActiveRouteToFront();
+  }, [activeStatsRouteId, bringActiveRouteToFront]);
   const [loading, setLoading] = useState<string | null>('Loading event…');
   const [error, setError] = useState<string | null>(null);
   const [albumOpen, setAlbumOpen] = useState(false);
@@ -627,13 +647,14 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
         } catch {
           /* no-op */
         }
+        bringActiveRouteToFront();
       });
       (layer as L.Layer).addTo(map);
       routeLayersRef.current.set(r._id, layer);
     } catch (err) {
       console.warn('Failed to load GPX', r.name, err);
     }
-  }, []);
+  }, [bringActiveRouteToFront]);
 
   // Draw numbered km markers along the currently active track. Cleared when
   // the user toggles SHOW KM off or switches to a different track.
