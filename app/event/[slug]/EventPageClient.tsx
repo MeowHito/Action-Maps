@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useEffect, useState, FormEvent } from 'react';
 import { isLoggedIn, getEventToken, setEventToken, clearEventToken } from '@/lib/auth';
 import { api } from '@/lib/api';
-import type { EventRole } from '@/lib/types';
+import type { EventDoc, EventRole } from '@/lib/types';
 
 const MapClient = dynamic(() => import('./MapClient'), {
   ssr: false,
@@ -17,6 +17,21 @@ const MapClient = dynamic(() => import('./MapClient'), {
 
 const headlineFont = { fontFamily: 'var(--font-headline), Space Grotesk, sans-serif' };
 
+const thaiDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
+function formatEventDates(startsAt?: string | null, endsAt?: string | null) {
+  if (!startsAt) return null;
+  const start = thaiDate(startsAt);
+  if (!endsAt) return start;
+  const end = thaiDate(endsAt);
+  return end === start ? start : `${start} – ${end}`;
+}
+
 export default function EventPageClient({ slug }: { slug: string }) {
   const [role, setRole] = useState<EventRole | null>(null);
   const [checking, setChecking] = useState(true);
@@ -24,6 +39,24 @@ export default function EventPageClient({ slug }: { slug: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showCode, setShowCode] = useState(false);
+  // Public event metadata (name / dates) so the code gate can announce the
+  // event instead of only showing the slug.
+  const [eventMeta, setEventMeta] = useState<EventDoc | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getEvent(slug)
+      .then((ev) => {
+        if (!cancelled) setEventMeta(ev);
+      })
+      .catch(() => {
+        /* keep slug fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
 
   useEffect(() => {
     const init = async () => {
@@ -81,6 +114,8 @@ export default function EventPageClient({ slug }: { slug: string }) {
     setError(null);
   };
 
+  const eventDateLabel = formatEventDates(eventMeta?.startsAt, eventMeta?.endsAt);
+
   if (checking) {
     return (
       <div className="flex h-screen w-full items-center justify-center text-sm text-zinc-500">
@@ -96,30 +131,57 @@ export default function EventPageClient({ slug }: { slug: string }) {
         style={{ fontFamily: 'var(--font-sans), Inter, sans-serif' }}
       >
         <div className="w-full max-w-xs">
-          <div className="flex items-center gap-1.5 mb-8">
+          <div className="mb-5 flex items-center gap-1.5">
             <span className="material-symbols-outlined text-[#004cca] scale-90">explore</span>
-            <span className="text-lg font-black tracking-tighter text-[#004cca] uppercase" style={headlineFont}>
+            <span className="text-sm font-black tracking-tighter text-[#004cca] uppercase" style={headlineFont}>
               GPX ACTION
             </span>
           </div>
 
-          <div className="mb-1 flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#004cca]/10">
-              <span className="material-symbols-outlined text-[#004cca]" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1" }}>
+          {/* Event announcement */}
+          <div className="kinetic-gradient relative mb-6 overflow-hidden rounded-2xl px-5 py-6 text-white shadow-lg shadow-[#004cca]/30">
+            <span
+              className="material-symbols-outlined pointer-events-none absolute -right-4 -top-4 text-white/10 select-none"
+              style={{ fontSize: 120, fontVariationSettings: "'FILL' 1" }}
+              aria-hidden
+            >
+              landscape
+            </span>
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/70" style={headlineFont}>
+              Event
+            </p>
+            <h1
+              className="mt-1 break-words text-[28px] font-black uppercase leading-[1.05] tracking-tight"
+              style={headlineFont}
+            >
+              {eventMeta?.name ?? slug}
+            </h1>
+            {eventDateLabel && (
+              <p className="mt-2 flex items-center gap-1 text-xs font-medium text-white/85">
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>
+                  calendar_month
+                </span>
+                {eventDateLabel}
+              </p>
+            )}
+            {eventMeta?.description && (
+              <p className="mt-2 line-clamp-2 text-xs text-white/80">{eventMeta.description}</p>
+            )}
+          </div>
+
+          <div className="mb-4 flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#004cca]/10">
+              <span className="material-symbols-outlined text-[#004cca]" style={{ fontSize: 18, fontVariationSettings: "'FILL' 1" }}>
                 lock
               </span>
             </div>
             <div>
-              <h1 className="text-lg font-black tracking-tighter text-[#191b24]" style={headlineFont}>
-                Event Access
-              </h1>
+              <p className="text-sm font-bold text-[#191b24]" style={headlineFont}>
+                ใส่รหัสเพื่อเข้าถึงกิจกรรมนี้
+              </p>
               <p className="text-[11px] text-[#737687]">/{slug}</p>
             </div>
           </div>
-
-          <p className="text-xs text-[#424656] mb-6 mt-3">
-            ใส่รหัสเพื่อเข้าถึงกิจกรรมนี้
-          </p>
 
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="relative">

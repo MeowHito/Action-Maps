@@ -466,6 +466,11 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   const userAccuracyRef = useRef<L.Circle | null>(null);
   const userWatchIdRef = useRef<number | null>(null);
   const userCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  // Compass heading support for the "you are here" marker.
+  const headingConeRef = useRef<HTMLElement | null>(null);
+  const headingCleanupRef = useRef<(() => void) | null>(null);
+  const headingLastTsRef = useRef(0);
+  const hasCompassRef = useRef(false);
   const mapLayersRef = useRef<{
     street: L.TileLayer;
     satellite: L.TileLayer;
@@ -986,9 +991,18 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     if (!map) return;
     userCoordsRef.current = { lat, lng };
     if (!userMarkerRef.current) {
+      // Dot + a translucent "view cone" that is rotated to the device's
+      // compass heading (hidden until a heading is known).
       const icon = L.divIcon({
         html:
-          '<div style="width:18px;height:18px;border-radius:9999px;background:#2563eb;border:3px solid white;box-shadow:0 0 0 2px rgba(37,99,235,0.35),0 2px 6px rgba(0,0,0,0.35);"></div>',
+          '<div style="position:relative;width:18px;height:18px;">' +
+          '<div data-heading-cone style="position:absolute;left:50%;bottom:50%;width:64px;height:72px;' +
+          'transform-origin:50% 100%;transform:translateX(-50%) rotate(0deg);opacity:0;' +
+          'transition:opacity .4s ease,transform .25s ease-out;pointer-events:none;' +
+          'clip-path:polygon(50% 100%,0 0,100% 0);' +
+          'background:linear-gradient(to top,rgba(37,99,235,.6),rgba(37,99,235,0));"></div>' +
+          '<div style="position:relative;width:18px;height:18px;border-radius:9999px;background:#2563eb;border:3px solid white;box-shadow:0 0 0 2px rgba(37,99,235,0.35),0 2px 6px rgba(0,0,0,0.35);"></div>' +
+          '</div>',
         className: '',
         iconSize: [18, 18],
         iconAnchor: [9, 9],
@@ -997,6 +1011,10 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
         icon,
         zIndexOffset: 1000,
       }).addTo(map);
+      headingConeRef.current =
+        userMarkerRef.current
+          .getElement()
+          ?.querySelector<HTMLElement>('[data-heading-cone]') ?? null;
     } else {
       userMarkerRef.current.setLatLng([lat, lng]);
     }
@@ -1017,12 +1035,84 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     }
   };
 
+  // Rotate the view cone to `deg` (compass degrees, clockwise from north).
+  // Throttled to ~20 updates/s; compass events can arrive at 60 Hz.
+  const applyHeading = (deg: number) => {
+    if (!Number.isFinite(deg)) return;
+    const now = Date.now();
+    if (now - headingLastTsRef.current < 50) return;
+    headingLastTsRef.current = now;
+    const el = headingConeRef.current;
+    if (!el) return;
+    const norm = ((deg % 360) + 360) % 360;
+    el.style.transform = `translateX(-50%) rotate(${norm}deg)`;
+    el.style.opacity = '1';
+  };
+
+  // Subscribe to the device compass. iOS needs an explicit permission
+  // request that must be triggered from a user gesture, so this is called
+  // synchronously from the locate button handler.
+  const startHeadingWatch = () => {
+    if (headingCleanupRef.current) return;
+    if (typeof window === 'undefined' || !('DeviceOrientationEvent' in window)) return;
+
+    const screenAngle = () => {
+      const o = window.screen?.orientation;
+      if (o && typeof o.angle === 'number') return o.angle;
+      const legacy = (window as unknown as { orientation?: number }).orientation;
+      return typeof legacy === 'number' ? legacy : 0;
+    };
+
+    const onOrientation = (ev: DeviceOrientationEvent) => {
+      const webkit = (ev as DeviceOrientationEvent & { webkitCompassHeading?: number })
+        .webkitCompassHeading;
+      let heading: number | null = null;
+      if (typeof webkit === 'number' && Number.isFinite(webkit)) {
+        // iOS: already a compass heading.
+        heading = webkit;
+      } else if (ev.absolute && typeof ev.alpha === 'number') {
+        // Android (absolute orientation): alpha is counter-clockwise from north.
+        heading = 360 - ev.alpha;
+      }
+      if (heading == null) return;
+      hasCompassRef.current = true;
+      applyHeading(heading + screenAngle());
+    };
+
+    const subscribe = () => {
+      const absName = 'ondeviceorientationabsolute' in window
+        ? 'deviceorientationabsolute'
+        : 'deviceorientation';
+      window.addEventListener(absName as 'deviceorientation', onOrientation, true);
+      headingCleanupRef.current = () => {
+        window.removeEventListener(absName as 'deviceorientation', onOrientation, true);
+        headingCleanupRef.current = null;
+      };
+    };
+
+    const DOE = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<'granted' | 'denied'>;
+    };
+    if (typeof DOE.requestPermission === 'function') {
+      DOE.requestPermission()
+        .then((state) => {
+          if (state === 'granted') subscribe();
+        })
+        .catch(() => {
+          /* user declined – cone stays hidden */
+        });
+    } else {
+      subscribe();
+    }
+  };
+
   const onLocateMe = () => {
     if (!navigator.geolocation) {
       alert('Geolocation is not supported on this device.');
       return;
     }
     setLocating(true);
+    startHeadingWatch();
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords;
@@ -1031,12 +1121,21 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
         setLocating(false);
         if (userWatchIdRef.current == null && navigator.geolocation) {
           userWatchIdRef.current = navigator.geolocation.watchPosition(
-            (p) =>
+            (p) => {
               setUserLocation(
                 p.coords.latitude,
                 p.coords.longitude,
                 p.coords.accuracy,
-              ),
+              );
+              // No compass available: fall back to GPS course while moving.
+              if (
+                !hasCompassRef.current &&
+                typeof p.coords.heading === 'number' &&
+                Number.isFinite(p.coords.heading)
+              ) {
+                applyHeading(p.coords.heading);
+              }
+            },
             () => {},
             { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
           );
@@ -1057,6 +1156,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
         navigator.geolocation.clearWatch(userWatchIdRef.current);
         userWatchIdRef.current = null;
       }
+      headingCleanupRef.current?.();
     };
   }, []);
 
