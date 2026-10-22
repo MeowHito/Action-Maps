@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import L from 'leaflet';
 import 'leaflet.markercluster';
@@ -99,6 +99,284 @@ function pointAtDistance(
   };
 }
 
+type RouteCp = { name: string; label: string; d: number };
+
+const M_PER_DEG_LAT = 110540;
+
+/** Closest point on segment a→b to (lat,lng), using a local flat-earth projection. */
+function projectOnSegment(
+  a: RouteDistPoint,
+  b: RouteDistPoint,
+  lat: number,
+  lng: number,
+  mPerDegLng: number,
+): { d: number; offM: number } {
+  const ax = (a.lng - lng) * mPerDegLng;
+  const ay = (a.lat - lat) * M_PER_DEG_LAT;
+  const dx = (b.lng - a.lng) * mPerDegLng;
+  const dy = (b.lat - a.lat) * M_PER_DEG_LAT;
+  const len2 = dx * dx + dy * dy;
+  const f = len2 > 0 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2)) : 0;
+  return { d: a.d + (b.d - a.d) * f, offM: Math.hypot(ax + dx * f, ay + dy * f) };
+}
+
+/**
+ * Snap a lat/lng onto a route: distance along the route (km) of the closest
+ * point, and how far off the route the input is (m).
+ */
+function locateOnRoute(
+  pts: RouteDistPoint[],
+  lat: number,
+  lng: number,
+): { d: number; offM: number } | null {
+  if (pts.length < 2) return null;
+  const mPerDegLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  let best = { d: 0, offM: Infinity };
+  for (let i = 1; i < pts.length; i++) {
+    const r = projectOnSegment(pts[i - 1], pts[i], lat, lng, mPerDegLng);
+    if (r.offM < best.offM) best = r;
+  }
+  return best;
+}
+
+/** Parse `<wpt>` elements (checkpoints) from a GPX file. */
+function parseGpxWaypoints(text: string): { name: string; lat: number; lng: number }[] {
+  try {
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const out: { name: string; lat: number; lng: number }[] = [];
+    for (const w of Array.from(doc.getElementsByTagName('wpt'))) {
+      const lat = parseFloat(w.getAttribute('lat') || 'NaN');
+      const lng = parseFloat(w.getAttribute('lon') || 'NaN');
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const name = w.getElementsByTagName('name')[0]?.textContent?.trim() || 'CP';
+      out.push({ name, lat, lng });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** "CP1/SP1青泥村" → "CP1", "起点/终点：泰湖公园" → "起点". */
+function cpShortLabel(name: string): string {
+  const code = name.match(/^[A-Za-z]{1,3}\s*\d+/);
+  if (code) return code[0].replace(/\s+/g, '').toUpperCase();
+  const head = name.split(/[/:：|,]/)[0].trim();
+  return (head || name).slice(0, 6);
+}
+
+/**
+ * Place GPX waypoints along the track. A waypoint the route passes more than
+ * once (start/finish of a loop, out-and-back CPs) gets one entry per pass.
+ * Waypoints further than 300 m from the track are ignored.
+ */
+function checkpointsOnRoute(
+  pts: RouteDistPoint[],
+  wpts: { name: string; lat: number; lng: number }[],
+): RouteCp[] {
+  if (pts.length < 2) return [];
+  const out: RouteCp[] = [];
+  for (const w of wpts) {
+    const mPerDegLng = 111320 * Math.cos((w.lat * Math.PI) / 180);
+    const segs: { d: number; offM: number }[] = [];
+    let minOff = Infinity;
+    for (let i = 1; i < pts.length; i++) {
+      const r = projectOnSegment(pts[i - 1], pts[i], w.lat, w.lng, mPerDegLng);
+      segs.push(r);
+      if (r.offM < minOff) minOff = r.offM;
+    }
+    if (minOff > 300) continue;
+    // Each contiguous run of segments near the waypoint is one pass.
+    const threshold = Math.max(80, minOff + 50);
+    const passes: number[] = [];
+    let run: { d: number; offM: number } | null = null;
+    for (const s of segs) {
+      if (s.offM <= threshold) {
+        if (!run || s.offM < run.offM) run = s;
+      } else if (run) {
+        passes.push(run.d);
+        run = null;
+      }
+    }
+    if (run) passes.push(run.d);
+    const label = cpShortLabel(w.name);
+    let last = -Infinity;
+    for (const d of passes) {
+      if (d - last < 0.3) continue;
+      out.push({ name: w.name, label, d });
+      last = d;
+    }
+  }
+  return out.sort((a, b) => a.d - b.d);
+}
+
+/** Linearly interpolated elevation at `d` km on a distance-sorted profile. */
+function eleAt(profile: { d: number; e: number }[], d: number): number {
+  if (!profile.length) return 0;
+  if (d <= profile[0].d) return profile[0].e;
+  const last = profile[profile.length - 1];
+  if (d >= last.d) return last.e;
+  let lo = 0;
+  let hi = profile.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (profile[mid].d <= d) lo = mid;
+    else hi = mid;
+  }
+  const a = profile[lo];
+  const b = profile[hi];
+  const span = b.d - a.d;
+  return span > 0 ? a.e + ((b.e - a.e) * (d - a.d)) / span : a.e;
+}
+
+/**
+ * Google-Maps-style one-finger zoom: double-tap, keep the finger down and drag
+ * up to zoom in / down to zoom out. A plain double-tap still zooms in. This
+ * replaces Leaflet's doubleClickZoom so the two never both fire on touch.
+ * Mirrors Leaflet's own TouchZoom handler (private _move/_animateZoom API).
+ */
+function enableOneFingerZoom(map: L.Map): () => void {
+  const el = map.getContainer();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const m = map as any;
+  const PX_PER_ZOOM_LEVEL = 100;
+  const DOUBLE_TAP_MS = 300;
+  const DOUBLE_TAP_PX = 40;
+  const activeTouches = new Set<number>();
+  let lastTouchTs = 0;
+  let lastTap: { t: number; x: number; y: number } | null = null;
+  let down: { id: number; t: number; x: number; y: number } | null = null;
+  let gesture: {
+    id: number;
+    startY: number;
+    startZoom: number;
+    anchorPt: L.Point;
+    anchor: L.LatLng;
+    offset: L.Point;
+    moved: boolean;
+    zoom: number;
+    center: L.LatLng;
+    raf: number;
+  } | null = null;
+
+  const finish = () => {
+    const g = gesture;
+    gesture = null;
+    if (!g) return;
+    L.Util.cancelAnimFrame(g.raf);
+    if (!g.moved) {
+      map.setZoomAround(g.anchorPt, map.getZoom() + 1);
+      return;
+    }
+    if (map.options.zoomAnimation) {
+      m._animateZoom(g.center, m._limitZoom(g.zoom), true, map.options.zoomSnap);
+    } else {
+      m._resetView(g.center, m._limitZoom(g.zoom));
+    }
+  };
+
+  // Capture phase on the container so the second tap never reaches Leaflet's
+  // drag / pinch handlers (which listen on the container in bubble phase).
+  const onDown = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    lastTouchTs = Date.now();
+    activeTouches.add(e.pointerId);
+    if (activeTouches.size > 1) {
+      // A second finger means a pinch — let Leaflet handle it.
+      down = null;
+      lastTap = null;
+      if (gesture) finish();
+      return;
+    }
+    const now = Date.now();
+    if (
+      lastTap &&
+      now - lastTap.t < DOUBLE_TAP_MS &&
+      Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < DOUBLE_TAP_PX
+    ) {
+      e.stopPropagation();
+      e.preventDefault();
+      lastTap = null;
+      map.stop();
+      const pt = map.mouseEventToContainerPoint(e);
+      gesture = {
+        id: e.pointerId,
+        startY: e.clientY,
+        startZoom: map.getZoom(),
+        anchorPt: pt,
+        anchor: map.containerPointToLatLng(pt),
+        offset: pt.subtract(map.getSize().divideBy(2)),
+        moved: false,
+        zoom: map.getZoom(),
+        center: map.getCenter(),
+        raf: 0,
+      };
+      return;
+    }
+    down = { id: e.pointerId, t: now, x: e.clientX, y: e.clientY };
+  };
+
+  const onMove = (e: PointerEvent) => {
+    const g = gesture;
+    if (!g || e.pointerId !== g.id) return;
+    e.preventDefault();
+    const dy = g.startY - e.clientY;
+    if (!g.moved) {
+      if (Math.abs(dy) < 8) return;
+      g.moved = true;
+      m._moveStart(true, false);
+    }
+    const zoom = Math.min(
+      map.getMaxZoom(),
+      Math.max(map.getMinZoom(), g.startZoom + dy / PX_PER_ZOOM_LEVEL),
+    );
+    const center = map.unproject(map.project(g.anchor, zoom).subtract(g.offset), zoom);
+    g.zoom = zoom;
+    g.center = center;
+    L.Util.cancelAnimFrame(g.raf);
+    g.raf = L.Util.requestAnimFrame(() =>
+      m._move(center, zoom, { pinch: true, round: false }),
+    );
+  };
+
+  const onUp = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    activeTouches.delete(e.pointerId);
+    if (gesture && e.pointerId === gesture.id) {
+      finish();
+      return;
+    }
+    if (down && e.pointerId === down.id) {
+      const isTap =
+        e.type === 'pointerup' &&
+        Date.now() - down.t < 250 &&
+        Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10;
+      lastTap = isTap ? { t: Date.now(), x: e.clientX, y: e.clientY } : null;
+      down = null;
+    }
+  };
+
+  // Mouse double-click keeps zooming in (shift = out); touch is handled above.
+  const onDblClick = (e: L.LeafletMouseEvent) => {
+    if (Date.now() - lastTouchTs < 1000) return;
+    map.setZoomAround(e.containerPoint, map.getZoom() + (e.originalEvent.shiftKey ? -1 : 1));
+  };
+
+  map.doubleClickZoom.disable();
+  map.on('dblclick', onDblClick);
+  el.addEventListener('pointerdown', onDown, true);
+  window.addEventListener('pointermove', onMove, { capture: true, passive: false });
+  window.addEventListener('pointerup', onUp, true);
+  window.addEventListener('pointercancel', onUp, true);
+  return () => {
+    map.off('dblclick', onDblClick);
+    el.removeEventListener('pointerdown', onDown, true);
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onUp, true);
+  };
+}
+
 /** Parse `<trkpt lat lon><time>` into a time-sorted timeline for photo matching. */
 function parseGpxTimeline(text: string): RoutePoint[] {
   try {
@@ -168,6 +446,10 @@ type RouteStats = {
   maxEle: number;
   /** Sampled cumulative distance (km) + elevation (m) for the mini chart. */
   profile: { d: number; e: number }[];
+  /** Full-resolution track for snapping photos / GPS onto the route. */
+  track: RouteDistPoint[];
+  /** GPX waypoints projected onto the track, sorted by distance. */
+  cps: RouteCp[];
 };
 
 function haversineKm(a: [number, number], b: [number, number]) {
@@ -181,7 +463,7 @@ function haversineKm(a: [number, number], b: [number, number]) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-function parseGpxStats(text: string): RouteStats | null {
+function parseGpxStats(text: string): Omit<RouteStats, 'track' | 'cps'> | null {
   try {
     const doc = new DOMParser().parseFromString(text, 'application/xml');
     const pts = Array.from(doc.getElementsByTagName('trkpt'));
@@ -214,8 +496,9 @@ function parseGpxStats(text: string): RouteStats | null {
       }
       prevLatLng = [lat, lon];
     }
-    // Downsample to ~80 points for chart
-    const maxPts = 80;
+    // Downsample to ~1000 points; the chart thins further to what's visible,
+    // so zooming in still shows detail.
+    const maxPts = 1000;
     const step = Math.max(1, Math.ceil(raw.length / maxPts));
     const profile: { d: number; e: number }[] = [];
     for (let i = 0; i < raw.length; i += step) profile.push(raw[i]);
@@ -234,72 +517,293 @@ function parseGpxStats(text: string): RouteStats | null {
   }
 }
 
+type ChartView = { d0: number; d1: number } | null;
+
+/** Clamp a [start, start+span) window to the route; null = fully zoomed out. */
+function clampChartView(
+  start: number,
+  span: number,
+  totalD: number,
+  minSpan: number,
+): ChartView {
+  const s = Math.min(totalD, Math.max(minSpan, span));
+  if (s >= totalD - 1e-9) return null;
+  const d0 = Math.min(Math.max(0, start), totalD - s);
+  return { d0, d1: d0 + s };
+}
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
 function ElevationChart({
   profile,
   color,
   minEle,
   maxEle,
   onDistanceHover,
+  cps = [],
+  userD = null,
 }: {
   profile: { d: number; e: number }[];
   color: string;
   minEle: number;
   maxEle: number;
   onDistanceHover?: (distanceKm: number | null) => void;
+  /** Checkpoints drawn as dashed vertical lines. */
+  cps?: RouteCp[];
+  /** Viewer's GPS position snapped onto this route (km), if on the route. */
+  userD?: number | null;
 }) {
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(
     null,
   );
+  const [view, setView] = useState<ChartView>(null);
+  const [plotWidth, setPlotWidth] = useState(300);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const plotRef = useRef<HTMLDivElement | null>(null);
+  const navRef = useRef<HTMLDivElement | null>(null);
+  // Active touch/mouse pointers on the chart → clientX, for pinch zoom.
+  const pointersRef = useRef<Map<number, number>>(new Map());
+  const pinchRef = useRef<{ startGap: number; startSpan: number; anchorD: number } | null>(null);
+  const navDragRef = useRef<{ pointerId: number; startX: number; startD0: number } | null>(null);
+  const clipId = useId();
+
   const W = 300;
   const H = 60;
   const pad = 4;
-  const maxD = profile[profile.length - 1]?.d || 1;
-  const range = Math.max(1, maxEle - minEle);
-  const eleStep = Math.max(1, Math.ceil(range / 4 / 50) * 50);
-  const yStart = Math.floor(minEle / eleStep) * eleStep;
-  const yEnd = Math.ceil(maxEle / eleStep) * eleStep;
+  const totalD = profile[profile.length - 1]?.d || 1;
+  const minSpan = Math.min(totalD, Math.max(0.1, totalD / 50));
+  const d0 = view?.d0 ?? 0;
+  const d1 = view?.d1 ?? totalD;
+  const span = Math.max(1e-6, d1 - d0);
+  const zoomed = view !== null;
+
+  // Points inside the window (plus one either side so the line reaches the
+  // edges), thinned to ~300 for drawing.
+  let i0 = 0;
+  while (i0 < profile.length - 1 && profile[i0 + 1].d < d0) i0++;
+  let i1 = profile.length - 1;
+  while (i1 > 0 && profile[i1 - 1].d > d1) i1--;
+  const visible = profile.slice(i0, i1 + 1);
+  const step = Math.max(1, Math.ceil(visible.length / 300));
+  const drawn = visible.filter((_, i) => i % step === 0 || i === visible.length - 1);
+
+  // Zoomed in → fit the elevation axis to the visible stretch for detail.
+  let lo = minEle;
+  let hi = maxEle;
+  if (zoomed) {
+    lo = Infinity;
+    hi = -Infinity;
+    for (const p of visible) {
+      if (p.e < lo) lo = p.e;
+      if (p.e > hi) hi = p.e;
+    }
+    lo = Math.floor(lo);
+    hi = Math.ceil(hi);
+  }
+  const range = Math.max(1, hi - lo);
+  const eleStep =
+    range < 100 ? (range < 40 ? 10 : 25) : Math.ceil(range / 4 / 50) * 50;
+  const yStart = Math.floor(lo / eleStep) * eleStep;
+  const yEnd = Math.max(yStart + eleStep, Math.ceil(hi / eleStep) * eleStep);
   const yRange = Math.max(1, yEnd - yStart);
-  const xy = profile.map((p) => {
-    const x = pad + ((p.d / maxD) * (W - pad * 2));
-    const y = pad + (1 - (p.e - yStart) / yRange) * (H - pad * 2);
-    return [x, y] as const;
-  });
+  const toX = (d: number) => pad + ((d - d0) / span) * (W - pad * 2);
+  const toY = (e: number) => pad + (1 - (e - yStart) / yRange) * (H - pad * 2);
+  const xy = drawn.map((p) => [toX(p.d), toY(p.e)] as const);
   const line = xy.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${H - pad} L${xy[0][0].toFixed(1)},${H - pad} Z`;
-  const xTicks = Array.from({ length: 6 }, (_, i) => (maxD / 5) * i);
+  const area = xy.length
+    ? `${line} L${xy[xy.length - 1][0].toFixed(1)},${H - pad} L${xy[0][0].toFixed(1)},${H - pad} Z`
+    : '';
+  const xTicks = Array.from({ length: 6 }, (_, i) => d0 + (span / 5) * i);
+  const xDecimals = span >= 10 ? 0 : span >= 1 ? 1 : 2;
   const yTicks = Array.from(
-    { length: Math.max(2, Math.round((yEnd - yStart) / eleStep) + 1) },
+    { length: Math.max(2, Math.round(yRange / eleStep) + 1) },
     (_, i) => yStart + eleStep * i,
   );
-  const emitDistance = (clientX: number, target: EventTarget | null) => {
-    if (!onDistanceHover || !(target instanceof SVGSVGElement)) return;
-    const rect = target.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    const distanceKm = ratio * maxD;
-    const nearestIdx = profile.reduce((bestIdx, p, idx) =>
-      Math.abs(p.d - distanceKm) < Math.abs(profile[bestIdx].d - distanceKm)
-        ? idx
-        : bestIdx,
-    0);
-    setHoverPoint({ x: ratio * 100, y: (xy[nearestIdx][1] / H) * 100 });
+
+  // Checkpoints in view; labels that would collide with the previous one are
+  // dropped (zooming in reveals them).
+  const visibleCps = cps.filter((cp) => cp.d >= d0 && cp.d <= d1);
+  const cpMarks: { cp: RouteCp; leftPct: number; showLabel: boolean }[] = [];
+  let lastLabelPct: number | null = null;
+  for (const cp of visibleCps) {
+    const leftPct = (toX(cp.d) / W) * 100;
+    const showLabel =
+      lastLabelPct === null || ((leftPct - lastLabelPct) / 100) * plotWidth >= 26;
+    if (showLabel) lastLabelPct = leftPct;
+    cpMarks.push({ cp, leftPct, showLabel });
+  }
+
+  const userInView = userD != null && userD >= d0 && userD <= d1;
+  const userPoint = userInView
+    ? { x: (toX(userD) / W) * 100, y: (toY(eleAt(profile, userD)) / H) * 100 }
+    : null;
+
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setPlotWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Mouse wheel / trackpad: vertical = zoom at cursor, horizontal = pan.
+  // Native listener because React's wheel handler is passive.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+        setView(clampChartView(d0 + (ev.deltaX / rect.width) * span, span, totalD, minSpan));
+        return;
+      }
+      const ratio = clamp01((ev.clientX - rect.left) / rect.width);
+      const anchorD = d0 + ratio * span;
+      const next = Math.min(totalD, Math.max(minSpan, span * Math.exp(ev.deltaY * 0.002)));
+      setView(clampChartView(anchorD - ratio * next, next, totalD, minSpan));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [d0, span, totalD, minSpan]);
+
+  const clearHover = () => {
+    setHoverPoint(null);
+    onDistanceHover?.(null);
+  };
+
+  const emitDistance = (clientX: number) => {
+    const svg = svgRef.current;
+    if (!onDistanceHover || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    const ratio = clamp01((clientX - rect.left) / rect.width);
+    const distanceKm = d0 + ratio * span;
+    setHoverPoint({
+      x: (toX(distanceKm) / W) * 100,
+      y: (toY(eleAt(profile, distanceKm)) / H) * 100,
+    });
     onDistanceHover(distanceKm);
   };
+
+  const pinchState = () => {
+    const svg = svgRef.current;
+    const [a, b] = Array.from(pointersRef.current.values());
+    if (!svg || a === undefined || b === undefined) return null;
+    const rect = svg.getBoundingClientRect();
+    return {
+      gap: Math.max(20, Math.abs(a - b)),
+      ratio: clamp01(((a + b) / 2 - rect.left) / rect.width),
+    };
+  };
+
+  const zoomBy = (factor: number) => {
+    const next = Math.min(totalD, Math.max(minSpan, span / factor));
+    const mid = d0 + span / 2;
+    setView(clampChartView(mid - next / 2, next, totalD, minSpan));
+  };
+
+  const endPointer = (e: React.PointerEvent<SVGSVGElement>) => {
+    pointersRef.current.delete(e.pointerId);
+    if (pinchRef.current) {
+      // Stay in pinch mode until every finger is lifted, so the last finger
+      // doesn't suddenly start scrubbing.
+      if (pointersRef.current.size === 0) pinchRef.current = null;
+    } else if (e.type === 'pointerup') {
+      emitDistance(e.clientX);
+    }
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const navStartDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const nav = navRef.current;
+    if (!nav || !zoomed) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = nav.getBoundingClientRect();
+    const clickD = clamp01((e.clientX - rect.left) / rect.width) * totalD;
+    let start = d0;
+    // Tap outside the window → jump the window there, then keep dragging.
+    if (clickD < d0 || clickD > d1) {
+      start = clampChartView(clickD - span / 2, span, totalD, minSpan)?.d0 ?? 0;
+      setView(clampChartView(start, span, totalD, minSpan));
+    }
+    navDragRef.current = { pointerId: e.pointerId, startX: e.clientX, startD0: start };
+  };
+
+  const navMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = navDragRef.current;
+    const nav = navRef.current;
+    if (!drag || !nav || drag.pointerId !== e.pointerId) return;
+    const rect = nav.getBoundingClientRect();
+    const dd = ((e.clientX - drag.startX) / rect.width) * totalD;
+    setView(clampChartView(drag.startD0 + dd, span, totalD, minSpan));
+  };
+
+  const navEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (navDragRef.current?.pointerId === e.pointerId) navDragRef.current = null;
+  };
+
+  const chartBtn =
+    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#ecedfa] text-[#424656] transition-colors hover:bg-[#e1e2ee] disabled:opacity-40';
+
   return (
-    <div className="relative mt-2 rounded-lg bg-white p-1.5">
-      <div className="relative h-28 pl-10 pb-5 md:h-36 md:pl-12 md:pb-6">
-        {yTicks.map((tick) => {
-          const pos = ((yEnd - tick) / Math.max(1, yEnd - yStart)) * 100;
-          return (
+    <div className="relative mt-2 rounded-lg bg-white p-1.5" data-no-panel-drag>
+      <div className="relative h-32 pl-10 pb-5 md:h-40 md:pl-12 md:pb-6">
+        {/* Y axis labels */}
+        <div className="pointer-events-none absolute bottom-5 left-0 top-4 w-10 md:bottom-6 md:w-12">
+          {yTicks.map((tick) => (
             <span
               key={tick}
               className="absolute left-0 -translate-y-1/2 text-[8px] font-semibold text-[#737687] md:text-[9px]"
-              style={{ top: `calc(0.25rem + ${pos}%)` }}
+              style={{ top: `${(toY(tick) / H) * 100}%` }}
             >
               {tick} m
             </span>
-          );
-        })}
-        <div className="absolute bottom-5 left-10 right-0 top-1 md:bottom-6 md:left-12">
+          ))}
+        </div>
+
+        {/* Checkpoint labels */}
+        <div className="pointer-events-none absolute left-10 right-0 top-0 h-4 md:left-12">
+          {cpMarks
+            .filter((m) => m.showLabel)
+            .map(({ cp, leftPct }) => (
+              <span
+                key={`${cp.name}-${cp.d}`}
+                title={cp.name}
+                className="absolute top-0 -translate-x-1/2 whitespace-nowrap rounded bg-[#191b24] px-1 text-[8px] font-bold leading-[13px] text-white md:text-[9px]"
+                style={{ left: `${leftPct}%` }}
+              >
+                {cp.label}
+              </span>
+            ))}
+        </div>
+
+        <div
+          ref={plotRef}
+          className="absolute bottom-5 left-10 right-0 top-4 md:bottom-6 md:left-12"
+        >
+          {cpMarks.map(({ cp, leftPct }) => (
+            <div
+              key={`line-${cp.name}-${cp.d}`}
+              className="pointer-events-none absolute bottom-0 top-0 border-l border-dashed border-[#191b24]/55"
+              style={{ left: `${leftPct}%` }}
+            />
+          ))}
+          {userPoint && (
+            <div
+              className="pointer-events-none absolute z-10"
+              style={{ left: `${userPoint.x}%`, top: `${userPoint.y}%` }}
+            >
+              <div className="absolute bottom-2.5 left-0 -translate-x-1/2 whitespace-nowrap rounded-full bg-[#2563eb] px-1.5 text-[8px] font-bold leading-[14px] text-white shadow md:text-[9px]">
+                คุณ · {userD!.toFixed(1)} km
+              </div>
+              <div className="absolute left-0 top-0 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-[#2563eb] shadow-[0_0_0_3px_rgba(37,99,235,0.3)]" />
+            </div>
+          )}
           {hoverPoint && (
             <div
               className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full text-[#004cca] drop-shadow-md"
@@ -314,26 +818,59 @@ function ElevationChart({
             </div>
           )}
           <svg
+            ref={svgRef}
             viewBox={`0 0 ${W} ${H}`}
             preserveAspectRatio="none"
             className="h-full w-full"
+            style={{ touchAction: 'none' }}
             aria-label="Elevation profile"
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId);
-              emitDistance(e.clientX, e.currentTarget);
+              pointersRef.current.set(e.pointerId, e.clientX);
+              if (pointersRef.current.size >= 2) {
+                const s = pinchState();
+                if (s) {
+                  pinchRef.current = {
+                    startGap: s.gap,
+                    startSpan: span,
+                    anchorD: d0 + s.ratio * span,
+                  };
+                }
+                clearHover();
+                return;
+              }
+              if (!pinchRef.current) emitDistance(e.clientX);
             }}
-            onPointerMove={(e) => emitDistance(e.clientX, e.currentTarget)}
-            onPointerLeave={() => {
-              setHoverPoint(null);
-              onDistanceHover?.(null);
+            onPointerMove={(e) => {
+              if (pointersRef.current.has(e.pointerId)) {
+                pointersRef.current.set(e.pointerId, e.clientX);
+              }
+              const pinch = pinchRef.current;
+              if (pinch) {
+                const s = pinchState();
+                if (!s) return;
+                const next = Math.min(
+                  totalD,
+                  Math.max(minSpan, (pinch.startSpan * pinch.startGap) / s.gap),
+                );
+                setView(
+                  clampChartView(pinch.anchorD - s.ratio * next, next, totalD, minSpan),
+                );
+                return;
+              }
+              emitDistance(e.clientX);
             }}
-            onPointerUp={(e) => {
-              emitDistance(e.clientX, e.currentTarget);
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }}
+            onPointerLeave={clearHover}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
           >
+            <defs>
+              <clipPath id={clipId}>
+                <rect x={pad} y={0} width={W - pad * 2} height={H} />
+              </clipPath>
+            </defs>
             {xTicks.map((tick) => {
-              const x = pad + (tick / maxD) * (W - pad * 2);
+              const x = toX(tick);
               return (
                 <line
                   key={`x-${tick}`}
@@ -348,7 +885,7 @@ function ElevationChart({
               );
             })}
             {yTicks.map((tick) => {
-              const y = pad + (1 - (tick - yStart) / Math.max(1, yEnd - yStart)) * (H - pad * 2);
+              const y = toY(tick);
               return (
                 <line
                   key={`y-${tick}`}
@@ -362,18 +899,178 @@ function ElevationChart({
                 />
               );
             })}
-            <path d={area} fill={color} opacity={0.18} />
-            <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+            <g clipPath={`url(#${clipId})`}>
+              <path d={area} fill={color} opacity={0.18} />
+              <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+            </g>
           </svg>
         </div>
         <div className="absolute bottom-0 left-10 right-0 flex justify-between text-[9px] font-bold text-[#424656] md:left-12 md:text-[9px] md:text-[#737687]">
           {xTicks.map((tick) => (
-            <span key={tick}>{tick.toFixed(maxD >= 10 ? 0 : 1)} km</span>
+            <span key={tick}>{tick.toFixed(xDecimals)} km</span>
           ))}
         </div>
       </div>
+
+      {/* Zoom controls + overview bar (drag the window to pan when zoomed) */}
+      <div className="mt-1 flex items-center gap-1.5 pl-10 md:pl-12">
+        <div
+          ref={navRef}
+          onPointerDown={navStartDrag}
+          onPointerMove={navMove}
+          onPointerUp={navEnd}
+          onPointerCancel={navEnd}
+          className={`relative h-3 flex-1 rounded-full bg-[#ecedfa] ${zoomed ? 'cursor-grab' : ''}`}
+          style={{ touchAction: 'none' }}
+          aria-label="Visible range"
+        >
+          {cps.map((cp) => (
+            <span
+              key={`nav-${cp.name}-${cp.d}`}
+              className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#191b24]/30"
+              style={{ left: `${(cp.d / totalD) * 100}%` }}
+            />
+          ))}
+          <div
+            className="pointer-events-none absolute bottom-0 top-0 rounded-full border border-[#004cca]/50 bg-[#004cca]/20"
+            style={{ left: `${(d0 / totalD) * 100}%`, width: `${(span / totalD) * 100}%` }}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => zoomBy(0.5)}
+          disabled={!zoomed}
+          aria-label="Zoom out chart"
+          className={chartBtn}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>remove</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomBy(2)}
+          disabled={span <= minSpan + 1e-9}
+          aria-label="Zoom in chart"
+          className={chartBtn}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+        </button>
+        {zoomed && (
+          <button
+            type="button"
+            onClick={() => setView(null)}
+            aria-label="Reset chart zoom"
+            title="ดูทั้งเส้นทาง"
+            className={chartBtn}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>zoom_out_map</span>
+          </button>
+        )}
+      </div>
     </div>
   );
+}
+
+type PhotoRouteMatch = {
+  route: RouteDoc;
+  stats: RouteStats;
+  d: number;
+  offM: number;
+  prevCp: RouteCp | null;
+  nextCp: RouteCp | null;
+};
+
+/** Find the route a photo sits on (nearest track) and where along it. */
+function matchPhotoToRoute(
+  lat: number,
+  lng: number,
+  routes: RouteDoc[],
+  routeStats: Record<string, RouteStats>,
+): PhotoRouteMatch | null {
+  let best: PhotoRouteMatch | null = null;
+  for (const route of routes) {
+    const stats = routeStats[route._id];
+    if (!stats) continue;
+    const loc = locateOnRoute(stats.track, lat, lng);
+    if (!loc || (best && loc.offM >= best.offM)) continue;
+    const prevCp = [...stats.cps].reverse().find((cp) => cp.d <= loc.d) ?? null;
+    const nextCp = stats.cps.find((cp) => cp.d > loc.d) ?? null;
+    best = { route, stats, d: loc.d, offM: loc.offM, prevCp, nextCp };
+  }
+  return best;
+}
+
+/** Small non-interactive map: the whole route plus a dot where the photo is. */
+function PhotoRouteMiniMap({
+  track,
+  color,
+  lat,
+  lng,
+}: {
+  track: RouteDistPoint[] | null;
+  color: string;
+  lat: number;
+  lng: number;
+}) {
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const groupRef = useRef<L.LayerGroup | null>(null);
+
+  useEffect(() => {
+    if (!elRef.current) return;
+    const map = L.map(elRef.current, {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      touchZoom: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+    }).addTo(map);
+    groupRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      groupRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const group = groupRef.current;
+    if (!map || !group) return;
+    group.clearLayers();
+    const here = L.latLng(lat, lng);
+    if (track && track.length > 1) {
+      // Tracks can have tens of thousands of points; ~2000 is plenty at this size.
+      const step = Math.max(1, Math.ceil(track.length / 2000));
+      const thinned = track.filter((_, i) => i % step === 0 || i === track.length - 1);
+      const routeLine = L.polyline(
+        thinned.map((p) => [p.lat, p.lng] as [number, number]),
+        { color, weight: 3, opacity: 0.9, interactive: false },
+      ).addTo(group);
+      map.fitBounds(routeLine.getBounds().extend(here), {
+        padding: [8, 8],
+        animate: false,
+      });
+    } else {
+      map.setView(here, 15, { animate: false });
+    }
+    L.circleMarker(here, {
+      radius: 6,
+      color: '#fff',
+      weight: 2,
+      fillColor: '#004cca',
+      fillOpacity: 1,
+      interactive: false,
+    }).addTo(group);
+  }, [track, color, lat, lng]);
+
+  return <div ref={elRef} className="h-full w-full" />;
 }
 
 const TRACK_COLORS = [
@@ -466,6 +1163,10 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   const userAccuracyRef = useRef<L.Circle | null>(null);
   const userWatchIdRef = useRef<number | null>(null);
   const userCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  // Same as userCoordsRef but as state, so the elevation chart can show it.
+  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null);
+  const focusMarkerRef = useRef<L.Marker | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Compass heading support for the "you are here" marker.
   const headingConeRef = useRef<HTMLElement | null>(null);
   const headingCleanupRef = useRef<(() => void) | null>(null);
@@ -523,8 +1224,10 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
 
     mapRef.current = map;
     clusterRef.current = cluster;
+    const disableOneFingerZoom = enableOneFingerZoom(map);
 
     return () => {
+      disableOneFingerZoom();
       map.remove();
       mapRef.current = null;
       clusterRef.current = null;
@@ -629,12 +1332,18 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     try {
       const res = await fetch(r.url);
       const text = await res.text();
-      const stats = parseGpxStats(text);
-      if (stats) setRouteStats((cur) => ({ ...cur, [r._id]: stats }));
       const timeline = parseGpxTimeline(text);
       if (timeline.length) routeTimelinesRef.current.set(r._id, timeline);
       const distPts = parseGpxDistPoints(text);
       if (distPts.length) routeDistPointsRef.current.set(r._id, distPts);
+      const stats = parseGpxStats(text);
+      if (stats) {
+        const cps = checkpointsOnRoute(distPts, parseGpxWaypoints(text));
+        setRouteStats((cur) => ({
+          ...cur,
+          [r._id]: { ...stats, track: distPts, cps },
+        }));
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const GPX = (L as any).GPX as new (
         data: string,
@@ -990,6 +1699,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     const map = mapRef.current;
     if (!map) return;
     userCoordsRef.current = { lat, lng };
+    setUserPos({ lat, lng });
     if (!userMarkerRef.current) {
       // Dot + a translucent "view cone" that is rotated to the device's
       // compass heading (hidden until a heading is known).
@@ -1218,6 +1928,32 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     }
   };
 
+  // Close the photo viewer and centre the main map on the photo, switching the
+  // stats panel to the route it was taken on. A short pulse marks the spot.
+  const flyToPhoto = (p: PhotoDoc, routeId: string | null) => {
+    setLightboxIdx(-1);
+    if (routeId) setActiveStatsRouteId(routeId);
+    const map = mapRef.current;
+    if (!map) return;
+    map.setView([p.lat, p.lng], 18);
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    focusMarkerRef.current?.remove();
+    focusMarkerRef.current = L.marker([p.lat, p.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="focus-pulse"></div>',
+        iconSize: [64, 64],
+        iconAnchor: [32, 32],
+      }),
+      interactive: false,
+      zIndexOffset: 1500,
+    }).addTo(map);
+    focusTimerRef.current = setTimeout(() => {
+      focusMarkerRef.current?.remove();
+      focusMarkerRef.current = null;
+    }, 3000);
+  };
+
   // ---- Swipe on lightbox ----
   const touchStartX = useRef(0);
   const onLightboxTouchStart = (e: React.TouchEvent) => {
@@ -1252,6 +1988,17 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   // ---- UI ----
   const currentPhoto =
     lightboxIdx >= 0 && lightboxIdx < photos.length ? photos[lightboxIdx] : null;
+  const photoMatch = currentPhoto
+    ? matchPhotoToRoute(currentPhoto.lat, currentPhoto.lng, routes, routeStats)
+    : null;
+  // Further than this from every track → treat the photo as "not on the route".
+  const photoOnRoute = photoMatch && photoMatch.offM <= 1000 ? photoMatch : null;
+  const activeStats = activeStatsRouteId ? routeStats[activeStatsRouteId] : undefined;
+  const userRouteD = useMemo(() => {
+    if (!userPos || !activeStats) return null;
+    const loc = locateOnRoute(activeStats.track, userPos.lat, userPos.lng);
+    return loc && loc.offM <= 500 ? loc.d : null;
+  }, [userPos, activeStats]);
   const headlineFont = {
     fontFamily: 'var(--font-headline), Space Grotesk, sans-serif',
   };
@@ -1397,7 +2144,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
             <div
               onPointerDown={(e) => {
                 if (window.innerWidth < 768) return;
-                if ((e.target as HTMLElement).closest('button, svg, input, label')) return;
+                if ((e.target as HTMLElement).closest('button, svg, input, label, [data-no-panel-drag]')) return;
                 const rect = e.currentTarget.getBoundingClientRect();
                 statsPanelDragRef.current = {
                   pointerId: e.pointerId,
@@ -1572,10 +2319,13 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
 
               {st.profile.length > 2 && (
                 <ElevationChart
+                  key={r._id}
                   profile={st.profile}
                   color={r.color}
                   minEle={st.minEle}
                   maxEle={st.maxEle}
+                  cps={st.cps}
+                  userD={userRouteD}
                   onDistanceHover={(distanceKm) =>
                     updateChartHoverMarker(r._id, distanceKm)
                   }
@@ -2009,6 +2759,8 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                           color={r.color}
                           minEle={st.minEle}
                           maxEle={st.maxEle}
+                          cps={st.cps}
+                          userD={userRouteD}
                         />
                       )}
                     </div>
@@ -2136,7 +2888,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
           <img
             src={currentPhoto.url}
             alt=""
-            className="max-h-[68vh] max-w-[94vw] rounded-xl object-contain shadow-2xl"
+            className="mb-36 max-h-[56vh] max-w-[94vw] rounded-xl object-contain shadow-2xl md:mb-32 md:max-h-[62vh]"
           />
           <button
             onClick={(e) => {
@@ -2159,39 +2911,94 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                 'linear-gradient(to top,rgba(25,27,36,0.85),transparent)',
             }}
           >
-            <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1">
-              <span
-                className="material-symbols-outlined text-sm text-white/70"
-                style={{ fontVariationSettings: "'FILL' 1" }}
-              >
-                location_on
-              </span>
-              <span
-                className="text-[10px] text-white/70"
+            <div className="flex w-full max-w-md items-stretch gap-3 rounded-2xl border border-white/15 bg-white/10 p-2 backdrop-blur-md">
+              {photoMatch && (
+                <button
+                  onClick={() => flyToPhoto(currentPhoto, photoOnRoute?.route._id ?? null)}
+                  aria-label="ดูบนแผนที่"
+                  className="relative isolate h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-white/20 bg-[#e1e2ee]"
+                >
+                  <PhotoRouteMiniMap
+                    track={photoMatch.stats.track}
+                    color={photoMatch.route.color}
+                    lat={currentPhoto.lat}
+                    lng={currentPhoto.lng}
+                  />
+                </button>
+              )}
+              <div
+                className="flex min-w-0 flex-1 flex-col justify-between gap-1.5 py-0.5"
                 style={{ fontFamily: 'Inter, sans-serif' }}
               >
-                {currentPhoto.lat.toFixed(5)}, {currentPhoto.lng.toFixed(5)}
-              </span>
+                {photoOnRoute ? (
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: photoOnRoute.route.color }}
+                      />
+                      <span className="truncate text-[10px] text-white/70">
+                        {photoOnRoute.route.name}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-1 text-white" style={headlineFont}>
+                      <span className="text-xl font-bold leading-tight">
+                        km {photoOnRoute.d.toFixed(1)}
+                      </span>
+                      <span className="text-[10px] font-semibold text-white/60">
+                        / {photoOnRoute.stats.distanceKm.toFixed(1)} km
+                      </span>
+                    </div>
+                    {(photoOnRoute.prevCp || photoOnRoute.nextCp) && (
+                      <div className="truncate text-[10px] font-semibold text-white/80">
+                        {photoOnRoute.prevCp && photoOnRoute.nextCp
+                          ? `ระหว่าง ${photoOnRoute.prevCp.label} → ${photoOnRoute.nextCp.label}`
+                          : photoOnRoute.prevCp
+                            ? `หลัง ${photoOnRoute.prevCp.label}`
+                            : `ก่อนถึง ${photoOnRoute.nextCp!.label}`}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold text-white/80">
+                      {photoMatch ? 'ไม่อยู่บนเส้นทาง' : 'ตำแหน่งภาพ'}
+                    </div>
+                    <div className="text-[10px] text-white/60">
+                      {currentPhoto.lat.toFixed(5)}, {currentPhoto.lng.toFixed(5)}
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => flyToPhoto(currentPhoto, photoOnRoute?.route._id ?? null)}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-full bg-white px-3 py-2 text-[#004cca] shadow-md transition-transform active:scale-95"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}
+                    >
+                      near_me
+                    </span>
+                    <span className="text-xs font-bold" style={headlineFont}>
+                      ดูบนแผนที่
+                    </span>
+                  </button>
+                  <a
+                    href={`https://www.google.com/maps?q=${currentPhoto.lat},${currentPhoto.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="View in Google Maps"
+                    title="View in Google Maps"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/12 transition-colors hover:bg-white/20"
+                  >
+                    <span className="material-symbols-outlined text-base text-white">
+                      open_in_new
+                    </span>
+                  </a>
+                </div>
+              </div>
             </div>
-            <a
-              href={`https://www.google.com/maps?q=${currentPhoto.lat},${currentPhoto.lng}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-2 rounded-full border border-white/20 bg-white/12 px-5 py-2.5 backdrop-blur-sm transition-colors hover:bg-white/20"
-            >
-              <span
-                className="material-symbols-outlined text-base text-white"
-                style={{ fontVariationSettings: "'FILL' 1" }}
-              >
-                open_in_new
-              </span>
-              <span
-                className="text-xs font-bold uppercase tracking-wider text-white"
-                style={headlineFont}
-              >
-                View in Google Maps
-              </span>
-            </a>
           </div>
         </div>
       )}
