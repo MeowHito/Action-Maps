@@ -155,3 +155,12 @@ body::before {
   from { transform: scale(0.3); opacity: 1; }
   to { transform: scale(1); opacity: 0; }
 }
+
+/* ---- "What's new" popup ---- */
+.whats-new-backdrop { animation: whats-new-fade 0.2s ease-out; }
+.whats-new-card { animation: whats-new-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+@keyframes whats-new-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes whats-new-pop {
+  from { opacity: 0; transform: translateY(24px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}

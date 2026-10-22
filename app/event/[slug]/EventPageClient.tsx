@@ -5,6 +5,7 @@ import { useEffect, useState, FormEvent } from 'react';
 import { isLoggedIn, getEventToken, setEventToken, clearEventToken } from '@/lib/auth';
 import { api } from '@/lib/api';
 import type { EventDoc, EventRole } from '@/lib/types';
+import WhatsNewModal from './WhatsNewModal';
 
 const MapClient = dynamic(() => import('./MapClient'), {
   ssr: false,
@@ -244,6 +245,7 @@ export default function EventPageClient({ slug }: { slug: string }) {
         </div>
       )}
       <MapClient slug={slug} role={role} />
+      <WhatsNewModal />
     </div>
   );
 }
