@@ -910,6 +910,20 @@ function PhotoRouteMiniMap({
   return <div ref={elRef} className="h-full w-full" />;
 }
 
+/** Where the user dragged the left toolbar to (per device). */
+const TOOLBAR_POS_KEY = 'map:toolbarPos';
+/** Keep the toolbar below the fixed header. */
+const TOOLBAR_MIN_TOP = 56;
+
+function readToolbarPos(): { x: number; y: number } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(TOOLBAR_POS_KEY) ?? 'null');
+    return v && Number.isFinite(v.x) && Number.isFinite(v.y) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 const TRACK_COLORS = [
   '#ff4d4d',
   '#33cc33',
@@ -933,6 +947,34 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   const routeDistPointsRef = useRef<Map<string, RouteDistPoint[]>>(new Map());
   const kmMarkersLayerRef = useRef<L.LayerGroup | null>(null);
   const chartHoverMarkerRef = useRef<L.Marker | null>(null);
+  // Left toolbar can be dragged out of the way; null = default position.
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const toolbarDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    last: { x: number; y: number } | null;
+  } | null>(null);
+  const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(readToolbarPos);
+  const hasToolbarPos = toolbarPos !== null;
+  // Pull the toolbar back on-screen when the window shrinks / rotates.
+  useEffect(() => {
+    if (!hasToolbarPos) return;
+    const clamp = () => {
+      const r = toolbarRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setToolbarPos((p) =>
+        p && {
+          x: Math.min(Math.max(0, p.x), window.innerWidth - r.width),
+          y: Math.min(Math.max(TOOLBAR_MIN_TOP, p.y), window.innerHeight - r.height),
+        },
+      );
+    };
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, [hasToolbarPos]);
   const statsPanelDragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -2175,7 +2217,11 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
 
       {/* ============== BOTTOM PANEL ============== */}
       <div
-        className="fixed left-2 top-16 z-[1000] w-auto px-0 pb-0 md:left-3 md:top-1/2 md:-translate-y-1/2"
+        ref={toolbarRef}
+        className={`fixed z-[1000] w-auto px-0 pb-0 ${
+          toolbarPos ? '' : 'left-2 top-16 md:left-3 md:top-1/2 md:-translate-y-1/2'
+        }`}
+        style={toolbarPos ? { left: toolbarPos.x, top: toolbarPos.y } : undefined}
       >
         <div className="mx-0 w-11 md:w-[76px]">
           {/* Upload progress card */}
@@ -2223,6 +2269,67 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
 
           {/* Main panel */}
           <div className="p-0 md:rounded-2xl md:border md:border-[#c2c6d9]/30 md:bg-[#faf8ff]/88 md:p-2 md:shadow-xl md:backdrop-blur-xl">
+            {/* Drag handle: move the toolbar; double-click puts it back */}
+            <button
+              type="button"
+              aria-label="ลากเพื่อย้ายแถบเครื่องมือ"
+              title="ลากเพื่อย้าย · ดับเบิลคลิกเพื่อกลับที่เดิม"
+              onPointerDown={(e) => {
+                const rect = toolbarRef.current?.getBoundingClientRect();
+                if (!rect) return;
+                toolbarDragRef.current = {
+                  pointerId: e.pointerId,
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  originX: rect.left,
+                  originY: rect.top,
+                  last: null,
+                };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const drag = toolbarDragRef.current;
+                const rect = toolbarRef.current?.getBoundingClientRect();
+                if (!drag || drag.pointerId !== e.pointerId || !rect) return;
+                const next = {
+                  x: Math.min(Math.max(0, drag.originX + e.clientX - drag.startX), window.innerWidth - rect.width),
+                  y: Math.min(
+                    Math.max(TOOLBAR_MIN_TOP, drag.originY + e.clientY - drag.startY),
+                    window.innerHeight - rect.height,
+                  ),
+                };
+                drag.last = next;
+                setToolbarPos(next);
+              }}
+              onPointerUp={(e) => {
+                const drag = toolbarDragRef.current;
+                if (drag?.pointerId !== e.pointerId) return;
+                toolbarDragRef.current = null;
+                if (drag.last) {
+                  try {
+                    localStorage.setItem(TOOLBAR_POS_KEY, JSON.stringify(drag.last));
+                  } catch {
+                    /* storage blocked — position lasts for this visit */
+                  }
+                }
+              }}
+              onPointerCancel={(e) => {
+                if (toolbarDragRef.current?.pointerId === e.pointerId) toolbarDragRef.current = null;
+              }}
+              onDoubleClick={() => {
+                setToolbarPos(null);
+                try {
+                  localStorage.removeItem(TOOLBAR_POS_KEY);
+                } catch {
+                  /* storage blocked */
+                }
+              }}
+              className="mx-auto mb-1.5 flex h-6 w-7 cursor-grab touch-none items-center justify-center rounded-full bg-white text-[#737687] shadow-md active:cursor-grabbing md:mb-1 md:h-5 md:w-full md:rounded-lg md:bg-transparent md:shadow-none md:hover:bg-[#ecedfa]"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18, lineHeight: 1 }}>
+                drag_handle
+              </span>
+            </button>
             <div className="grid grid-cols-1 gap-1.5">
               <button
                 onClick={onLocateMe}

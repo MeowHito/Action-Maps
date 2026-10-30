@@ -19,6 +19,17 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.1',
+    date: '2026-10-30',
+    items: [
+      {
+        icon: 'drag_pan',
+        title: 'ย้ายแถบเครื่องมือด้านซ้ายได้',
+        detail: 'ลากที่จับด้านบนของแถบไปวางตรงไหนก็ได้ถ้ามันบังแผนที่ ระบบจำตำแหน่งไว้ ดับเบิลคลิกที่จับเพื่อกลับที่เดิม',
+      },
+    ],
+  },
+  {
     version: '1.2.0',
     date: '2026-10-30',
     items: [
