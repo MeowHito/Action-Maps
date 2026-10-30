@@ -19,6 +19,32 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.0',
+    date: '2026-10-30',
+    items: [
+      {
+        icon: 'edit_note',
+        title: 'ปุ่ม “แผนงาน” ใหม่',
+        detail: 'ทำผังเส้นทางสำหรับทีมงานได้ในเว็บ ลากวางรูป ข้อความ รูปทรง แบบ Canva แล้วดาวน์โหลดเป็น PNG / JPG / PDF',
+      },
+      {
+        icon: 'auto_awesome',
+        title: 'สร้างแผนงานอัตโนมัติ',
+        detail: 'กดครั้งเดียวได้หน้าละ 1 เส้นทาง: แผนที่ตรงกลาง รูปที่ถ่ายบนเส้นทางวางรอบ ๆ พร้อมระยะ km',
+      },
+      {
+        icon: 'conversion_path',
+        title: 'เส้นชี้ที่เกาะเส้นทาง',
+        detail: 'เส้นประ / ทึบ / จุดไข่ปลา ปรับความหนาได้ ปลายเส้นวางได้เฉพาะบนเส้นทางในไฟล์ GPX เท่านั้น',
+      },
+      {
+        icon: 'closed_caption',
+        title: 'คำบรรยายใต้รูป',
+        detail: 'ทุกรูปใส่ข้อความได้ (หรือไม่ใส่ก็ได้) เช่น 17KM · Car 3 · SAT 09.00 - 15.00',
+      },
+    ],
+  },
+  {
     version: '1.1.0',
     date: '2026-10-22',
     items: [
