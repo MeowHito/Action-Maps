@@ -19,6 +19,17 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.2',
+    date: '2026-10-30',
+    items: [
+      {
+        icon: 'view_agenda',
+        title: 'แถบเครื่องมือบนมือถือกะทัดรัดขึ้น',
+        detail: 'ปุ่มชิดกันมากขึ้นและอยู่ชิดด้านบน บังแผนที่น้อยลง ปุ่มเพิ่มรูปเป็นปุ่มขาวเหมือนปุ่มอื่น ไม่มีพื้นสีฟ้าแล้ว',
+      },
+    ],
+  },
+  {
     version: '1.2.1',
     date: '2026-10-30',
     items: [

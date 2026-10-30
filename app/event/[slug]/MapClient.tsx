@@ -2219,7 +2219,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
       <div
         ref={toolbarRef}
         className={`fixed z-[1000] w-auto px-0 pb-0 ${
-          toolbarPos ? '' : 'left-2 top-16 md:left-3 md:top-1/2 md:-translate-y-1/2'
+          toolbarPos ? '' : 'left-2 top-14 md:left-3 md:top-1/2 md:-translate-y-1/2'
         }`}
         style={toolbarPos ? { left: toolbarPos.x, top: toolbarPos.y } : undefined}
       >
@@ -2324,18 +2324,18 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                   /* storage blocked */
                 }
               }}
-              className="mx-auto mb-1.5 flex h-6 w-7 cursor-grab touch-none items-center justify-center rounded-full bg-white text-[#737687] shadow-md active:cursor-grabbing md:mb-1 md:h-5 md:w-full md:rounded-lg md:bg-transparent md:shadow-none md:hover:bg-[#ecedfa]"
+              className="mx-auto mb-1 flex h-6 w-7 cursor-grab touch-none items-center justify-center rounded-full bg-white text-[#737687] shadow-md active:cursor-grabbing md:mb-1 md:h-5 md:w-full md:rounded-lg md:bg-transparent md:shadow-none md:hover:bg-[#ecedfa]"
             >
               <span className="material-symbols-outlined" style={{ fontSize: 18, lineHeight: 1 }}>
                 drag_handle
               </span>
             </button>
-            <div className="grid grid-cols-1 gap-1.5">
+            <div className="grid grid-cols-1 gap-1 md:gap-1.5">
               <button
                 onClick={onLocateMe}
                 disabled={locating}
                 aria-label="Locate me"
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 disabled:opacity-60 md:hidden"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 disabled:opacity-60 md:hidden"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md">
                   <span
@@ -2350,7 +2350,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
               <button
                 onClick={toggleMapStyle}
                 aria-label="Toggle map style"
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:hidden"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 md:hidden"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md">
                   <span
@@ -2363,7 +2363,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
               </button>
 
               {/* GPX Upload */}
-              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border-0 bg-transparent p-1.5 transition-all active:scale-95 md:border md:border-[#004cca]/20 md:bg-[#004cca]/8 md:p-2.5 md:hover:bg-[#004cca]/15">
+              <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border-0 bg-transparent p-0.5 transition-all active:scale-95 md:border md:border-[#004cca]/20 md:bg-[#004cca]/8 md:p-2.5 md:hover:bg-[#004cca]/15">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
                   <span
                     className="material-symbols-outlined md:text-2xl"
@@ -2393,7 +2393,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
               {/* Tracks list */}
               <button
                 onClick={() => setRoutesOpen(true)}
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
                   <span
@@ -2420,7 +2420,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
               </button>
 
               {/* Photo upload */}
-              {canUploadPhoto && <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 shadow-none transition-transform active:scale-95 md:p-2.5 md:shadow-md kinetic-gradient">
+              {canUploadPhoto && <label className="relative flex cursor-pointer flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 shadow-none transition-transform active:scale-95 md:bg-[linear-gradient(135deg,#004cca_0%,#0062ff_100%)] md:p-2.5 md:shadow-md">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#004cca] shadow-md md:h-auto md:w-auto md:bg-transparent md:text-white md:shadow-none">
                   <span
                     className="material-symbols-outlined md:text-2xl"
@@ -2458,7 +2458,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
               {/* Album */}
               <button
                 onClick={() => setAlbumOpen(true)}
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
                   <span
@@ -2489,7 +2489,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                 href={`/event/${slug}/plan`}
                 title="แผนงาน"
                 aria-label="แผนงาน"
-                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-1.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
                   <span
