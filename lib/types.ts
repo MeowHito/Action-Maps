@@ -25,6 +25,8 @@ export interface PhotoDoc {
   size: number;
   takenAt?: string | null;
   uploader?: string | null;
+  /** Uploader's owner tag; equals the `ot` claim of the uploader's token. */
+  ownerTag?: string | null;
   createdAt: string;
 }
 

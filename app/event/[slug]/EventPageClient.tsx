@@ -2,7 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import { useEffect, useState, FormEvent } from 'react';
-import { isLoggedIn, getEventToken, setEventToken, clearEventToken } from '@/lib/auth';
+import {
+  isLoggedIn,
+  getEventToken,
+  getEventOwnerTag,
+  setEventToken,
+  clearEventToken,
+} from '@/lib/auth';
 import { api } from '@/lib/api';
 import type { EventDoc, EventRole } from '@/lib/types';
 import WhatsNewModal from './WhatsNewModal';
@@ -63,6 +69,16 @@ export default function EventPageClient({ slug }: { slug: string }) {
     const init = async () => {
       const stored = getEventToken(slug);
       if (stored) {
+        // Tokens from before photo ownership carry no owner tag; swap them for
+        // one that does so this device's uploads can be deleted by it.
+        if (stored.role === 'upload' && !getEventOwnerTag(slug)) {
+          try {
+            const res = await api.refreshEventToken(slug);
+            setEventToken(slug, res.role, res.token);
+          } catch {
+            /* keep the old token; uploads just won't be deletable */
+          }
+        }
         setRole(stored.role);
         setChecking(false);
         return;
@@ -233,7 +249,7 @@ export default function EventPageClient({ slug }: { slug: string }) {
   return (
     <div className="relative">
       {role !== 'admin' && (
-        <div className="fixed top-3 right-3 z-[5000]">
+        <div className="fixed top-3 right-3 z-[2500]">
           <button
             onClick={onChangeCode}
             className="flex items-center gap-1 rounded-full border border-[#c2c6d9]/40 bg-white/90 backdrop-blur-sm px-2.5 py-1 text-[10px] text-[#737687] shadow-sm hover:text-red-600 transition-colors"

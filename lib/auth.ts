@@ -155,3 +155,38 @@ export function clearEventToken(slug: string): void {
   delete tokens[slug];
   localStorage.setItem(EVENT_TOKENS_KEY, JSON.stringify(tokens));
 }
+
+// ---- Device identity (photo ownership) ----
+
+const DEVICE_ID_KEY = 'am_device_id';
+
+/** Random per-browser ID, sent when entering an event code so photos uploaded
+ *  from this device can later be deleted by it. Survives "change code". */
+export function getDeviceId(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      const bytes = crypto.getRandomValues(new Uint8Array(18));
+      id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Owner tag (`ot`) from this event's token; matches `photo.ownerTag` for
+ *  photos this device uploaded. Null for tokens issued before ownership. */
+export function getEventOwnerTag(slug: string): string | null {
+  const t = getEventToken(slug)?.token;
+  if (!t) return null;
+  try {
+    const part = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(part)) as { ot?: unknown };
+    return typeof payload.ot === 'string' ? payload.ot : null;
+  } catch {
+    return null;
+  }
+}

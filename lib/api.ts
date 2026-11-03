@@ -1,4 +1,5 @@
 import type { EventDoc, EventRole, PhotoDoc, RouteDoc } from './types';
+import { getDeviceId } from './auth';
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -54,7 +55,14 @@ export const api = {
     fetch(`${API_BASE}/api/auth/event/${slug}/token`, {
       method: 'POST',
       headers: jsonHeaders,
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, deviceId: getDeviceId() }),
+    }).then(handle<{ token: string; role: EventRole }>),
+
+  refreshEventToken: (slug: string) =>
+    fetch(`${API_BASE}/api/auth/event/${slug}/refresh`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...eventAuthHeader(slug) },
+      body: JSON.stringify({ deviceId: getDeviceId() }),
     }).then(handle<{ token: string; role: EventRole }>),
 
   siteAdminEventToken: (slug: string) => {

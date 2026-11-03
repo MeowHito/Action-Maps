@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { getSocket, joinEvent } from '@/lib/socket';
 import { extractGps, extractTakenAt, processForUpload } from '@/lib/image';
 import type { EventDoc, EventRole, PhotoDoc, RouteDoc } from '@/lib/types';
+import { getEventOwnerTag } from '@/lib/auth';
 import {
   checkpointsOnRoute,
   locateOnRoute,
@@ -938,6 +939,11 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   const canUploadPhoto = role === 'admin' || role === 'upload';
   const canUploadRoute = role === 'admin';
   const canDelete = role === 'admin';
+  // Uploaders may delete only photos they uploaded from this device.
+  const [myOwnerTag] = useState(() => getEventOwnerTag(slug));
+  const canDeletePhoto = (p: PhotoDoc) =>
+    role === 'admin' ||
+    (role === 'upload' && !!myOwnerTag && p.ownerTag === myOwnerTag);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const clusterRef = useRef<MarkerClusterGroup | null>(null);
@@ -1766,11 +1772,14 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     setLoading(null);
   };
 
-  const onDeletePhoto = async (id: string) => {
+  const onDeletePhoto = async (id: string): Promise<boolean> => {
+    if (!confirm('ลบรูปนี้?')) return false;
     try {
       await api.deletePhoto(id, slug);
+      return true;
     } catch (err) {
       alert((err as Error).message);
+      return false;
     }
   };
 
@@ -2815,9 +2824,14 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                 {lightboxIdx + 1} / {photos.length}
               </span>
             </div>
-            {canDelete && <button
+            {canDeletePhoto(currentPhoto) && <button
               onClick={async () => {
-                await onDeletePhoto(currentPhoto._id);
+                const id = currentPhoto._id;
+                if (!(await onDeletePhoto(id))) return;
+                // Drop it locally right away; the socket event may arrive later
+                // (or not at all if the connection dropped).
+                setPhotos((cur) => cur.filter((x) => x._id !== id));
+                removePhotoMarker(id);
                 setLightboxIdx((idx) => {
                   const next =
                     idx >= photos.length - 1 ? photos.length - 2 : idx;
