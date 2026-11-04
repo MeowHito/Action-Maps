@@ -3,7 +3,7 @@
  * pointer lines" layout and the starter templates.
  */
 import type { PhotoDoc, RouteDoc } from '@/lib/types';
-import { locateAllOnRoute, locateOnRoute, SAME_TRAIL_TOLERANCE_M } from '@/lib/gpx';
+import { locateAllOnRoute, locateOnRoute, pickFirstOnTrail, SAME_TRAIL_TOLERANCE_M } from '@/lib/gpx';
 import type { Background, ConnectorElement, ImageElement, MapElement, PlanElement } from './types';
 import { formatKm, makeImage, makeMap, makeShape, makeText, makeIcon, uid } from './constants';
 import { anchorToPage } from './geometry';
@@ -39,16 +39,19 @@ export async function photoSize(p: { url: string; width?: number; height?: numbe
   }
 }
 
-/** Nearest route (of a map) to a lat/lng, with distance along it. */
+/**
+ * The route (of a map) a photo's caption and pointer use, with distance along
+ * it. On a trail several routes share, the map's first route wins, so a page
+ * keeps to one route's km.
+ */
 export function locatePhoto(map: MapElement, lat: number, lng: number) {
-  let best: { routeId: string; d: number; offM: number } | null = null;
+  const hits: { routeId: string; d: number; offM: number }[] = [];
   for (const id of map.routeIds) {
     const g = getGeom(id);
-    if (!g) continue;
-    const r = locateOnRoute(g.pts, lat, lng);
-    if (r && (!best || r.offM < best.offM)) best = { routeId: id, d: r.d, offM: r.offM };
+    const r = g ? locateOnRoute(g.pts, lat, lng) : null;
+    if (r) hits.push({ routeId: id, d: r.d, offM: r.offM });
   }
-  return best;
+  return pickFirstOnTrail(hits);
 }
 
 /** Every route of a map that passes a lat/lng, closest first, with each km it passes at. */

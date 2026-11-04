@@ -147,6 +147,16 @@ export function locateAllOnRoute(
   return passes.map(({ d, offM }) => ({ d, offM }));
 }
 
+/**
+ * Choose between routes matched to one spot, given in order of priority: the
+ * first that is on the trail there, not whichever GPS noise put a metre closer.
+ */
+export function pickFirstOnTrail<T extends { offM: number }>(hits: T[]): T | null {
+  if (!hits.length) return null;
+  const closest = Math.min(...hits.map((h) => h.offM));
+  return hits.find((h) => h.offM <= closest + SAME_TRAIL_TOLERANCE_M) ?? null;
+}
+
 /** Parse `<wpt>` elements (checkpoints) from a GPX file. */
 export function parseGpxWaypoints(text: string): { name: string; lat: number; lng: number }[] {
   try {

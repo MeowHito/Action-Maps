@@ -5,7 +5,8 @@
  * clicked (added to the page centre / into the selected empty slot) or
  * dragged onto the canvas.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { PhotoDoc, RouteDoc } from '@/lib/types';
 import type { Background, MapElement, PlanElement, ShapeKind } from './types';
 import { FONTS, formatKm, GRADIENTS, ICONS, makeIcon, makeLine, makeShape, makeText, SWATCHES, uid } from './constants';
@@ -301,6 +302,7 @@ function PhotosTab() {
   const version = useAssetVersion();
   const [checked, setChecked] = useState<string[]>([]);
   const [nearOnly, setNearOnly] = useState(false);
+  const [preview, setPreview] = useState<PhotoDoc | null>(null);
   const map = elements.find((e) => e.type === 'map') as MapElement | undefined;
   const mapRoutes = map?.routeIds.join() ?? '';
 
@@ -309,20 +311,13 @@ function PhotosTab() {
     void version;
     const m = activeMap();
     return new Map(
-      photos.map((p) => {
-        const hits = m ? locatePhotoPasses(m, p.lat, p.lng).filter((h) => h.offM < 500) : [];
-        const marks: PhotoKmMark[] = hits.map((h) => ({
-          kms: h.kms,
-          color: m && m.routeIds.length > 1 ? routeColor(m, h.routeId) : null,
-        }));
-        return [p._id, marks] as const;
-      }),
+      photos.map((p) => [p._id, m ? photoKmMarks(m, p) : []] as const),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photos, mapRoutes, version]);
 
   const list = useMemo(() => {
-    const firstKm = (id: string) => located.get(id)?.[0]?.kms[0] ?? Infinity;
+    const firstKm = (id: string) => located.get(id)?.[0]?.firstKm ?? Infinity;
     const l = nearOnly ? photos.filter((p) => located.get(p._id)?.length) : photos.slice();
     if (map) l.sort((a, b) => firstKm(a._id) - firstKm(b._id));
     return l;
@@ -373,20 +368,93 @@ function PhotosTab() {
       </div>
       <div className="grid grid-cols-2 gap-2 p-3">
         {list.map((p) => (
-          <PhotoTile key={p._id} p={p} marks={located.get(p._id) ?? []} checked={checked.includes(p._id)} onToggle={() => toggle(p._id)} />
+          <PhotoTile
+            key={p._id}
+            p={p}
+            marks={located.get(p._id) ?? []}
+            checked={checked.includes(p._id)}
+            onToggle={() => toggle(p._id)}
+            onPreview={() => setPreview(p)}
+          />
         ))}
       </div>
+      {preview && <PhotoPreview p={preview} onClose={() => setPreview(null)} />}
     </>
   );
 }
 
-/** Where a route passes a photo. `color` tells routes apart on multi-route maps. */
+/** One km label on a photo. `colors` names its routes on multi-route maps. */
 interface PhotoKmMark {
-  kms: number[];
-  color: string | null;
+  label: string;
+  firstKm: number;
+  colors: string[];
 }
 
-function PhotoTile({ p, marks, checked, onToggle }: { p: PhotoDoc; marks: PhotoKmMark[]; checked: boolean; onToggle: () => void }) {
+/** Km labels for a photo; routes that read the same km share one label. */
+function photoKmMarks(map: MapElement, p: PhotoDoc): PhotoKmMark[] {
+  const marks: PhotoKmMark[] = [];
+  for (const hit of locatePhotoPasses(map, p.lat, p.lng)) {
+    if (hit.offM >= 500) continue;
+    const label = hit.kms.map(formatKm).join(' · ');
+    const colors = map.routeIds.length > 1 ? [routeColor(map, hit.routeId)] : [];
+    const same = marks.find((m) => m.label === label);
+    if (same) same.colors.push(...colors);
+    else marks.push({ label, firstKm: hit.kms[0], colors });
+  }
+  return marks;
+}
+
+/**
+ * Full-window view of an event photo. It swallows key presses so the editor's
+ * shortcuts (delete, nudge…) can't change the page hidden behind it.
+ */
+function PhotoPreview({ p, onClose }: { p: PhotoDoc; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="ดูรูปขนาดใหญ่"
+      className="whats-new-backdrop fixed inset-0 z-[6000] flex items-center justify-center bg-black/85 p-4"
+      onPointerDown={(e) => e.target === e.currentTarget && onClose()}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={p.url} alt="" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" draggable={false} />
+      <button
+        type="button"
+        autoFocus
+        aria-label="ปิด"
+        onClick={onClose}
+        className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+      >
+        <Icon name="close" size={24} />
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
+function PhotoTile({
+  p,
+  marks,
+  checked,
+  onToggle,
+  onPreview,
+}: {
+  p: PhotoDoc;
+  marks: PhotoKmMark[];
+  checked: boolean;
+  onToggle: () => void;
+  onPreview: () => void;
+}) {
   return (
     <div
       className={`group relative aspect-[4/3] cursor-pointer overflow-hidden rounded-lg bg-[var(--pe-hover)] ring-offset-1 ring-offset-[var(--pe-panel)] ${checked ? 'ring-2 ring-[var(--pe-primary)]' : ''}`}
@@ -410,12 +478,26 @@ function PhotoTile({ p, marks, checked, onToggle }: { p: PhotoDoc; marks: PhotoK
       >
         <Icon name="check" size={18} />
       </button>
+      <button
+        type="button"
+        aria-label="ดูรูปขนาดใหญ่"
+        data-tip="ดูรูปขนาดใหญ่"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPreview();
+        }}
+        className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md bg-black/50 text-white shadow hover:bg-black/75"
+      >
+        <Icon name="visibility" size={18} />
+      </button>
       {marks.length > 0 && (
         <div className="absolute bottom-1.5 right-1.5 flex max-w-[calc(100%-12px)] flex-col items-end gap-0.5">
           {marks.map((m, i) => (
             <span key={i} className="flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white" style={headlineFont}>
-              {m.color && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: m.color }} />}
-              {m.kms.map(formatKm).join(' · ')}
+              {m.colors.map((c, j) => (
+                <span key={j} className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: c }} />
+              ))}
+              {m.label}
             </span>
           ))}
         </div>
