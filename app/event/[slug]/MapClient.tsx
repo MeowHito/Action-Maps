@@ -2378,7 +2378,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                     className="material-symbols-outlined md:text-2xl"
                     style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
                   >
-                    map
+                    upload_file
                   </span>
                 </span>
                 <span

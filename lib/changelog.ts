@@ -19,6 +19,17 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.5',
+    date: '2026-11-04',
+    items: [
+      {
+        icon: 'upload_file',
+        title: 'ไอคอนปุ่มไม่ซ้ำกันแล้ว',
+        detail: 'ปุ่มอัปโหลด GPX เปลี่ยนเป็นไอคอนไฟล์ จึงไม่หน้าตาเหมือนปุ่มสลับแผนที่ตอนดูภาพดาวเทียมอีก',
+      },
+    ],
+  },
+  {
     version: '1.2.4',
     date: '2026-11-03',
     items: [
