@@ -3,7 +3,7 @@
  * pointer lines" layout and the starter templates.
  */
 import type { PhotoDoc, RouteDoc } from '@/lib/types';
-import { locateOnRoute } from '@/lib/gpx';
+import { locateAllOnRoute, locateOnRoute, SAME_TRAIL_TOLERANCE_M } from '@/lib/gpx';
 import type { Background, ConnectorElement, ImageElement, MapElement, PlanElement } from './types';
 import { formatKm, makeImage, makeMap, makeShape, makeText, makeIcon, uid } from './constants';
 import { anchorToPage } from './geometry';
@@ -49,6 +49,19 @@ export function locatePhoto(map: MapElement, lat: number, lng: number) {
     if (r && (!best || r.offM < best.offM)) best = { routeId: id, d: r.d, offM: r.offM };
   }
   return best;
+}
+
+/** Every route of a map that passes a lat/lng, closest first, with each km it passes at. */
+export function locatePhotoPasses(map: MapElement, lat: number, lng: number) {
+  const hits: { routeId: string; kms: number[]; offM: number }[] = [];
+  for (const id of map.routeIds) {
+    const g = getGeom(id);
+    if (!g) continue;
+    const passes = locateAllOnRoute(g.pts, lat, lng);
+    if (passes.length) hits.push({ routeId: id, kms: passes.map((p) => p.d), offM: Math.min(...passes.map((p) => p.offM)) });
+  }
+  hits.sort((a, b) => a.offM - b.offM);
+  return hits.filter((h) => h.offM <= hits[0].offM + SAME_TRAIL_TOLERANCE_M);
 }
 
 export interface LayoutStyle {

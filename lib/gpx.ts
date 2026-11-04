@@ -103,6 +103,50 @@ export function locateOnRoute(
   return best;
 }
 
+/**
+ * Two tracks of the same trail, or two laps of it, differ by GPS noise only.
+ * Anything this much further (m) than the closest match still counts as "here".
+ */
+export const SAME_TRAIL_TOLERANCE_M = 40;
+
+/** Matches closer together than this along the route (km) are one visit. */
+const MIN_PASS_GAP_KM = 0.5;
+
+/**
+ * Every time a route passes a lat/lng: loops and out-and-backs cross the same
+ * spot more than once. Sorted by distance along the route; empty if unusable.
+ */
+export function locateAllOnRoute(
+  pts: RouteDistPoint[],
+  lat: number,
+  lng: number,
+): { d: number; offM: number }[] {
+  if (pts.length < 2) return [];
+  const mPerDegLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  const segments: { d: number; offM: number }[] = [];
+  let closest = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const r = projectOnSegment(pts[i - 1], pts[i], lat, lng, mPerDegLng);
+    segments.push(r);
+    if (r.offM < closest) closest = r.offM;
+  }
+  const passes: { d: number; offM: number; endD: number }[] = [];
+  for (const r of segments) {
+    if (r.offM > closest + SAME_TRAIL_TOLERANCE_M) continue;
+    const last = passes[passes.length - 1];
+    if (!last || r.d - last.endD >= MIN_PASS_GAP_KM) {
+      passes.push({ ...r, endD: r.d });
+      continue;
+    }
+    last.endD = r.d;
+    if (r.offM < last.offM) {
+      last.d = r.d;
+      last.offM = r.offM;
+    }
+  }
+  return passes.map(({ d, offM }) => ({ d, offM }));
+}
+
 /** Parse `<wpt>` elements (checkpoints) from a GPX file. */
 export function parseGpxWaypoints(text: string): { name: string; lat: number; lng: number }[] {
   try {

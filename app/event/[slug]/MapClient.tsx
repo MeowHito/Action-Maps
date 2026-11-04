@@ -12,10 +12,12 @@ import type { EventDoc, EventRole, PhotoDoc, RouteDoc } from '@/lib/types';
 import { getEventOwnerTag } from '@/lib/auth';
 import {
   checkpointsOnRoute,
+  locateAllOnRoute,
   locateOnRoute,
   parseGpxDistPoints,
   parseGpxWaypoints,
   pointAtDistance,
+  SAME_TRAIL_TOLERANCE_M,
   type RouteCp,
   type RouteDistPoint,
 } from '@/lib/gpx';
@@ -815,6 +817,10 @@ type PhotoRouteMatch = {
   offM: number;
   prevCp: RouteCp | null;
   nextCp: RouteCp | null;
+  /** Other km where this same route comes back to the spot. */
+  repeatKms: number[];
+  /** Other routes sharing the trail here, and the km each passes it at. */
+  alsoOn: { route: RouteDoc; kms: number[] }[];
 };
 
 /** Find the route a photo sits on (nearest track) and where along it. */
@@ -824,17 +830,32 @@ function matchPhotoToRoute(
   routes: RouteDoc[],
   routeStats: Record<string, RouteStats>,
 ): PhotoRouteMatch | null {
-  let best: PhotoRouteMatch | null = null;
-  for (const route of routes) {
+  const hits = routes.flatMap((route) => {
     const stats = routeStats[route._id];
-    if (!stats) continue;
-    const loc = locateOnRoute(stats.track, lat, lng);
-    if (!loc || (best && loc.offM >= best.offM)) continue;
-    const prevCp = [...stats.cps].reverse().find((cp) => cp.d <= loc.d) ?? null;
-    const nextCp = stats.cps.find((cp) => cp.d > loc.d) ?? null;
-    best = { route, stats, d: loc.d, offM: loc.offM, prevCp, nextCp };
-  }
-  return best;
+    const passes = stats ? locateAllOnRoute(stats.track, lat, lng) : [];
+    if (!passes.length) return [];
+    const nearest = passes.reduce((a, b) => (b.offM < a.offM ? b : a));
+    return [{ route, stats, passes, nearest }];
+  });
+  if (!hits.length) return null;
+  hits.sort((a, b) => a.nearest.offM - b.nearest.offM);
+  const { route, stats, passes, nearest } = hits[0];
+  const { d, offM } = nearest;
+  const prevCp = [...stats.cps].reverse().find((cp) => cp.d <= d) ?? null;
+  const nextCp = stats.cps.find((cp) => cp.d > d) ?? null;
+  return {
+    route,
+    stats,
+    d,
+    offM,
+    prevCp,
+    nextCp,
+    repeatKms: passes.filter((p) => p !== nearest).map((p) => p.d),
+    alsoOn: hits
+      .slice(1)
+      .filter((h) => h.nearest.offM <= offM + SAME_TRAIL_TOLERANCE_M)
+      .map((h) => ({ route: h.route, kms: h.passes.map((p) => p.d) })),
+  };
 }
 
 /** Small non-interactive map: the whole route plus a dot where the photo is. */
@@ -2939,6 +2960,18 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                             : `ก่อนถึง ${photoOnRoute.nextCp!.label}`}
                       </div>
                     )}
+                    {photoOnRoute.repeatKms.length > 0 && (
+                      <div className="truncate text-[10px] font-semibold text-white/80">
+                        ผ่านจุดนี้อีกครั้งที่ km {photoOnRoute.repeatKms.map((k) => k.toFixed(1)).join(', ')}
+                      </div>
+                    )}
+                    {photoOnRoute.alsoOn.map((o) => (
+                      <div key={o.route._id} className="flex min-w-0 items-center gap-1.5 text-[10px] font-semibold text-white/80">
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: o.route.color }} />
+                        <span className="truncate">{o.route.name}</span>
+                        <span className="shrink-0">km {o.kms.map((k) => k.toFixed(1)).join(', ')}</span>
+                      </div>
+                    ))}
                   </div>
                 ) : (
                   <div className="min-w-0">

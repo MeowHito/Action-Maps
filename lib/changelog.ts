@@ -19,6 +19,17 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.6',
+    date: '2026-11-04',
+    items: [
+      {
+        icon: 'alt_route',
+        title: 'รูปบนทางร่วมบอก km ครบทุกระยะ',
+        detail: 'จุดที่หลายระยะใช้ทางเดียวกัน หรือเส้นทางวนกลับมาผ่านซ้ำ จะแสดง km ของทุกระยะและทุกรอบที่ผ่าน ทั้งตอนเปิดดูรูปและในแถบรูปของหน้าทำแผน',
+      },
+    ],
+  },
+  {
     version: '1.2.5',
     date: '2026-11-04',
     items: [

@@ -151,7 +151,7 @@ async function ensureMapGeoms(map: MapElement) {
   );
 }
 
-function routeColor(map: MapElement, routeId: string) {
+export function routeColor(map: MapElement, routeId: string) {
   return map.routeColors[routeId] ?? useEditor.getState().routes.find((r) => r._id === routeId)?.color ?? '#ef4444';
 }
 

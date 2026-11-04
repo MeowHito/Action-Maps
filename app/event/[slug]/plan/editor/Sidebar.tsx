@@ -13,6 +13,7 @@ import { useEditor, usePageElements, type SidebarTab } from './store';
 import { getGeom, useAssetVersion } from './runtime';
 import {
   activeMap,
+  routeColor,
   addEventPhoto,
   addEventPhotos,
   addMap,
@@ -23,7 +24,7 @@ import {
   toast,
   uploadFiles,
 } from './actions';
-import { locatePhoto, TEMPLATES } from './builders';
+import { locatePhotoPasses, TEMPLATES } from './builders';
 import { draggableItem } from './dnd';
 import LayersPanel from './LayersPanel';
 import { ColorField, headlineFont, Icon, PrimaryBtn, Section, Slider, SoftBtn } from './ui';
@@ -309,16 +310,21 @@ function PhotosTab() {
     const m = activeMap();
     return new Map(
       photos.map((p) => {
-        const loc = m ? locatePhoto(m, p.lat, p.lng) : null;
-        return [p._id, loc && loc.offM < 500 ? loc.d : null] as const;
+        const hits = m ? locatePhotoPasses(m, p.lat, p.lng).filter((h) => h.offM < 500) : [];
+        const marks: PhotoKmMark[] = hits.map((h) => ({
+          kms: h.kms,
+          color: m && m.routeIds.length > 1 ? routeColor(m, h.routeId) : null,
+        }));
+        return [p._id, marks] as const;
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photos, mapRoutes, version]);
 
   const list = useMemo(() => {
-    const l = nearOnly ? photos.filter((p) => located.get(p._id) != null) : photos.slice();
-    if (map) l.sort((a, b) => (located.get(a._id) ?? Infinity) - (located.get(b._id) ?? Infinity));
+    const firstKm = (id: string) => located.get(id)?.[0]?.kms[0] ?? Infinity;
+    const l = nearOnly ? photos.filter((p) => located.get(p._id)?.length) : photos.slice();
+    if (map) l.sort((a, b) => firstKm(a._id) - firstKm(b._id));
     return l;
   }, [photos, nearOnly, located, map]);
 
@@ -367,14 +373,20 @@ function PhotosTab() {
       </div>
       <div className="grid grid-cols-2 gap-2 p-3">
         {list.map((p) => (
-          <PhotoTile key={p._id} p={p} km={located.get(p._id) ?? null} checked={checked.includes(p._id)} onToggle={() => toggle(p._id)} />
+          <PhotoTile key={p._id} p={p} marks={located.get(p._id) ?? []} checked={checked.includes(p._id)} onToggle={() => toggle(p._id)} />
         ))}
       </div>
     </>
   );
 }
 
-function PhotoTile({ p, km, checked, onToggle }: { p: PhotoDoc; km: number | null; checked: boolean; onToggle: () => void }) {
+/** Where a route passes a photo. `color` tells routes apart on multi-route maps. */
+interface PhotoKmMark {
+  kms: number[];
+  color: string | null;
+}
+
+function PhotoTile({ p, marks, checked, onToggle }: { p: PhotoDoc; marks: PhotoKmMark[]; checked: boolean; onToggle: () => void }) {
   return (
     <div
       className={`group relative aspect-[4/3] cursor-pointer overflow-hidden rounded-lg bg-[var(--pe-hover)] ring-offset-1 ring-offset-[var(--pe-panel)] ${checked ? 'ring-2 ring-[var(--pe-primary)]' : ''}`}
@@ -398,10 +410,15 @@ function PhotoTile({ p, km, checked, onToggle }: { p: PhotoDoc; km: number | nul
       >
         <Icon name="check" size={18} />
       </button>
-      {km != null && (
-        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white" style={headlineFont}>
-          {formatKm(km)}
-        </span>
+      {marks.length > 0 && (
+        <div className="absolute bottom-1.5 right-1.5 flex max-w-[calc(100%-12px)] flex-col items-end gap-0.5">
+          {marks.map((m, i) => (
+            <span key={i} className="flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white" style={headlineFont}>
+              {m.color && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: m.color }} />}
+              {m.kms.map(formatKm).join(' · ')}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
