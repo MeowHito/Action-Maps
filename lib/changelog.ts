@@ -19,6 +19,17 @@ export interface ChangelogEntry {
  */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.0',
+    date: '2026-11-04',
+    items: [
+      {
+        icon: 'photo_size_select_large',
+        title: 'ปรับขนาดรูปบนแผนที่ได้เอง',
+        detail: 'รูปกลับมาขนาดเดิม และเลือกขนาดเองได้ กดปุ่ม Size ในแถบเครื่องมือด้านซ้าย แล้วเลื่อนแถบเพื่อขยายหรือย่อรูปบนแผนที่',
+      },
+    ],
+  },
+  {
     version: '1.3.4',
     date: '2026-11-04',
     items: [

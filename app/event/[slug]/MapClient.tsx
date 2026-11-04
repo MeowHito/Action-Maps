@@ -25,7 +25,11 @@ import {
 type MarkerClusterGroup = L.MarkerClusterGroup;
 
 /** Diameter of the round photo markers on the map (px). */
-const MARKER_SIZE = 72;
+const MARKER_SIZE_DEFAULT = 45;
+const MARKER_SIZE_MIN = 20;
+const MARKER_SIZE_MAX = 90;
+/** Fan-out spacing that keeps spread photos from stacking at a marker size. */
+const spiderSpacing = (markerSize: number) => markerSize / 25;
 type AnyMarker = L.Marker & { _photoId?: string; options: L.MarkerOptions & { imgUrl?: string } };
 
 type RoutePoint = { lat: number; lng: number; t: number };
@@ -1056,6 +1060,8 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   }, [activeStatsRouteId, bringActiveRouteToFront]);
   const [loading, setLoading] = useState<string | null>('Loading event…');
   const [error, setError] = useState<string | null>(null);
+  const [markerSize, setMarkerSize] = useState(MARKER_SIZE_DEFAULT);
+  const [markerSliderOpen, setMarkerSliderOpen] = useState(false);
   const [albumOpen, setAlbumOpen] = useState(false);
   const [routesOpen, setRoutesOpen] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
@@ -1120,15 +1126,14 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
 
     const cluster = L.markerClusterGroup({
       showCoverageOnHover: false,
-      // Default spacing suits small pins; fanned-out photos would stack up.
-      spiderfyDistanceMultiplier: MARKER_SIZE / 25,
+      spiderfyDistanceMultiplier: spiderSpacing(MARKER_SIZE_DEFAULT),
       iconCreateFunction: (c) => {
         const children = c.getAllChildMarkers() as AnyMarker[];
         const imgUrl = children[children.length - 1]?.options?.imgUrl ?? '';
         return L.divIcon({
           html: `<div class="photo-marker-wrapper"><div class="photo-marker" style="background-image:url('${imgUrl}')"></div><div class="cluster-count">${c.getChildCount()}</div></div>`,
           className: 'custom-cluster-icon',
-          iconSize: L.point(MARKER_SIZE, MARKER_SIZE),
+          iconSize: L.point(0, 0),
         });
       },
     });
@@ -1146,9 +1151,13 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     };
   }, []);
 
+  // Sizing is CSS only: icons are zero-size points, centred by .photo-marker-wrapper.
   useEffect(() => {
-    document.documentElement.style.setProperty('--marker-size', `${MARKER_SIZE}px`);
-  }, []);
+    document.documentElement.style.setProperty('--marker-size', `${markerSize}px`);
+    if (clusterRef.current) {
+      L.Util.setOptions(clusterRef.current, { spiderfyDistanceMultiplier: spiderSpacing(markerSize) });
+    }
+  }, [markerSize]);
 
   const updateChartHoverMarker = useCallback(
     (routeId: string, distanceKm: number | null) => {
@@ -1200,8 +1209,7 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     const icon = L.divIcon({
       html: `<div class="photo-marker-wrapper"><div class="photo-marker" data-id="${p._id}" style="background-image:url('${p.url}')"></div></div>`,
       className: '',
-      iconSize: [MARKER_SIZE, MARKER_SIZE],
-      iconAnchor: [MARKER_SIZE / 2, MARKER_SIZE / 2],
+      iconSize: [0, 0],
     });
     const marker = L.marker([p.lat, p.lng], {
       icon,
@@ -1853,8 +1861,8 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
       icon: L.divIcon({
         className: '',
         html: '<div class="focus-pulse"></div>',
-        iconSize: [100, 100],
-        iconAnchor: [50, 50],
+        iconSize: [64, 64],
+        iconAnchor: [32, 32],
       }),
       interactive: false,
       zIndexOffset: 1500,
@@ -2247,6 +2255,32 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
         );
       })()}
 
+      {/* Photo size slider */}
+      {markerSliderOpen && (
+        <div className="fixed left-1/2 top-16 z-[1000] flex w-72 max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-3 rounded-2xl border border-[#c2c6d9]/30 bg-[#faf8ff]/95 px-3 py-2.5 shadow-xl backdrop-blur-xl">
+          <span className="material-symbols-outlined text-base text-[#737687]">zoom_out</span>
+          <input
+            type="range"
+            min={MARKER_SIZE_MIN}
+            max={MARKER_SIZE_MAX}
+            value={markerSize}
+            onChange={(e) => setMarkerSize(parseInt(e.target.value, 10))}
+            aria-label="ขนาดรูปบนแผนที่"
+            className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full"
+            style={{
+              accentColor: '#004cca',
+              background: `linear-gradient(to right,#004cca 0%,#004cca ${
+                ((markerSize - MARKER_SIZE_MIN) / (MARKER_SIZE_MAX - MARKER_SIZE_MIN)) * 100
+              }%,#e1e2ee ${
+                ((markerSize - MARKER_SIZE_MIN) / (MARKER_SIZE_MAX - MARKER_SIZE_MIN)) * 100
+              }%,#e1e2ee 100%)`,
+            }}
+          />
+          <span className="material-symbols-outlined text-base text-[#737687]">zoom_in</span>
+          <span className="w-6 text-right text-[10px] font-semibold text-[#424656]">{markerSize}</span>
+        </div>
+      )}
+
       {/* ============== BOTTOM PANEL ============== */}
       <div
         ref={toolbarRef}
@@ -2486,6 +2520,29 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
                   }}
                 />
               </label>}
+
+              {/* Photo size on the map */}
+              <button
+                onClick={() => setMarkerSliderOpen((open) => !open)}
+                aria-label="ปรับขนาดรูปบนแผนที่"
+                aria-expanded={markerSliderOpen}
+                className="relative flex flex-col items-center gap-1 rounded-xl bg-transparent p-0.5 transition-all active:scale-95 md:bg-[#ecedfa] md:p-2.5 md:hover:bg-[#e7e7f4]"
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#424656] shadow-md md:h-auto md:w-auto md:bg-transparent md:shadow-none">
+                  <span
+                    className="material-symbols-outlined md:text-2xl"
+                    style={{ fontSize: 18, lineHeight: 1, display: 'block', fontVariationSettings: "'wght' 300" }}
+                  >
+                    photo_size_select_large
+                  </span>
+                </span>
+                <span
+                  className="hidden text-[8px] font-bold uppercase tracking-wider text-[#424656] md:block"
+                  style={headlineFont}
+                >
+                  Size
+                </span>
+              </button>
 
               {/* Album */}
               <button
