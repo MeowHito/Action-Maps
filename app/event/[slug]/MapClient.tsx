@@ -23,6 +23,9 @@ import {
 } from '@/lib/gpx';
 
 type MarkerClusterGroup = L.MarkerClusterGroup;
+
+/** Diameter of the round photo markers on the map (px). */
+const MARKER_SIZE = 72;
 type AnyMarker = L.Marker & { _photoId?: string; options: L.MarkerOptions & { imgUrl?: string } };
 
 type RoutePoint = { lat: number; lng: number; t: number };
@@ -1015,7 +1018,6 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
   const [photos, setPhotos] = useState<PhotoDoc[]>([]);
   const [routes, setRoutes] = useState<RouteDoc[]>([]);
   const [routeStats, setRouteStats] = useState<Record<string, RouteStats>>({});
-  const [markerSize] = useState(45);
   const [activeStatsRouteId, setActiveStatsRouteId] = useState<string | null>(
     null,
   );
@@ -1107,22 +1109,26 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { attribution: '&copy; OpenStreetMap', maxZoom: 19 },
     );
+    // Must reach the same max zoom as the street layer: photo clusters are built
+    // for z19, so a map stopping at z18 leaves clusters that click to nothing.
     const satelliteLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      { attribution: '© Esri', maxZoom: 18 },
+      { attribution: '© Esri', maxZoom: 19, maxNativeZoom: 18 },
     );
     streetLayer.addTo(map);
     mapLayersRef.current = { street: streetLayer, satellite: satelliteLayer };
 
     const cluster = L.markerClusterGroup({
       showCoverageOnHover: false,
+      // Default spacing suits small pins; fanned-out photos would stack up.
+      spiderfyDistanceMultiplier: MARKER_SIZE / 25,
       iconCreateFunction: (c) => {
         const children = c.getAllChildMarkers() as AnyMarker[];
         const imgUrl = children[children.length - 1]?.options?.imgUrl ?? '';
         return L.divIcon({
           html: `<div class="photo-marker-wrapper"><div class="photo-marker" style="background-image:url('${imgUrl}')"></div><div class="cluster-count">${c.getChildCount()}</div></div>`,
           className: 'custom-cluster-icon',
-          iconSize: L.point(45, 45),
+          iconSize: L.point(MARKER_SIZE, MARKER_SIZE),
         });
       },
     });
@@ -1140,13 +1146,9 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     };
   }, []);
 
-  // ---- Marker size reactivity ----
   useEffect(() => {
-    document.documentElement.style.setProperty(
-      '--marker-size',
-      `${markerSize}px`,
-    );
-  }, [markerSize]);
+    document.documentElement.style.setProperty('--marker-size', `${MARKER_SIZE}px`);
+  }, []);
 
   const updateChartHoverMarker = useCallback(
     (routeId: string, distanceKm: number | null) => {
@@ -1198,8 +1200,8 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
     const icon = L.divIcon({
       html: `<div class="photo-marker-wrapper"><div class="photo-marker" data-id="${p._id}" style="background-image:url('${p.url}')"></div></div>`,
       className: '',
-      iconSize: [45, 45],
-      iconAnchor: [22, 22],
+      iconSize: [MARKER_SIZE, MARKER_SIZE],
+      iconAnchor: [MARKER_SIZE / 2, MARKER_SIZE / 2],
     });
     const marker = L.marker([p.lat, p.lng], {
       icon,
@@ -1851,8 +1853,8 @@ export default function MapClient({ slug, role }: { slug: string; role: EventRol
       icon: L.divIcon({
         className: '',
         html: '<div class="focus-pulse"></div>',
-        iconSize: [64, 64],
-        iconAnchor: [32, 32],
+        iconSize: [100, 100],
+        iconAnchor: [50, 50],
       }),
       interactive: false,
       zIndexOffset: 1500,

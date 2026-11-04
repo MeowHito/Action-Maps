@@ -15,7 +15,7 @@
   --accent-ink: #1e3d26;
   --danger:   #a13030;
 
-  --marker-size: 45px;
+  --marker-size: 72px;
 
   /* Kinetic Cartography palette (home page) */
   --k-primary:                #004cca;
@@ -132,8 +132,8 @@ body::before {
   background: #a13030;
   color: white;
   border-radius: 9999px;
-  padding: 2px 6px;
-  font-size: 10px;
+  padding: 3px 8px;
+  font-size: 13px;
   font-weight: 700;
   border: 1px solid white;
   z-index: 2;
@@ -144,8 +144,8 @@ body::before {
 
 /* ---- "Here it is" pulse after jumping to a photo from the viewer ---- */
 .focus-pulse {
-  width: 64px;
-  height: 64px;
+  width: 100px;
+  height: 100px;
   border-radius: 9999px;
   border: 3px solid #004cca;
   background: rgba(0, 76, 202, 0.15);
